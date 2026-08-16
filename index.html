@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>今日やること — 製造管理</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header>
+  <h1>今日やること</h1>
+  <div class="date" id="today"></div>
+  <div class="progress-wrap"><div class="progress-bar" id="pbar"></div></div>
+  <div class="progress-label" id="plabel"></div>
+  <div class="nav"><a href="plan.html">📅 予定登録・一覧</a></div>
+</header>
+<main id="list"><div class="empty">読み込み中…</div></main>
+<div class="fab" onclick="openProductSheet()">＋ 臨時で仕込む</div>
+
+<div class="sheet-bg" id="sheetbg" onclick="closeSheets()"></div>
+<div class="sheet" id="sheet-product">
+  <h2>何を仕込む？</h2>
+  <div class="grid" id="product-grid"></div>
+</div>
+<div class="sheet" id="sheet-batch">
+  <h2 id="batch-title">バッチ数は？</h2>
+  <div class="grid">
+    <button onclick="quickAdd(1)">1バッチ</button>
+    <button onclick="quickAdd(2)">2バッチ</button>
+    <button onclick="quickAdd(3)">3バッチ</button>
+    <button onclick="quickAdd(4)">4バッチ</button>
+  </div>
+</div>
+<div class="sheet" id="sheet-member">
+  <h2>担当者</h2>
+  <div class="grid" id="member-grid"></div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="api.js"></script>
+<script>
+let tasks = [], members = [], products = [];
+let pendingProduct = null, memberTarget = null;
+
+function toast(msg) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  setTimeout(() => t.classList.remove("show"), 2500);
+}
+
+async function load() {
+  const [t, m] = await Promise.all([
+    rest("v_today_tasks?select=*"),
+    rest("members?select=id,display_name&is_active=eq.true&order=sort_order"),
+  ]);
+  tasks = t; members = m;
+  render();
+}
+
+async function loadProducts() {
+  if (products.length) return;
+  products = await rest("products?select=id,name,yield_per_batch&is_active=eq.true&order=name&limit=60");
+}
+
+function render() {
+  $("today").textContent = jpDate(new Date());
+  const list = $("list");
+  if (!tasks.length) {
+    list.innerHTML = '<div class="empty">今日のタスクはまだありません。<br>「＋臨時で仕込む」か「予定登録」から追加できます</div>';
+  } else {
+    list.innerHTML = tasks.map(cardHtml).join("");
+  }
+  const countable = tasks.filter((t) => t.task_category !== "オーダーケーキ");
+  const done = countable.filter((t) => t.status === "完了").length;
+  $("pbar").style.width = countable.length ? (done / countable.length) * 100 + "%" : "0%";
+  $("plabel").textContent = `${done} / ${countable.length} 完了（オーダーケーキは対象外）`;
+}
+
+function cardHtml(t) {
+  const cls = t.product_id || t.ingredient_id ? (KUBUN_CLASS[t.task_category] || "sonota")
+            : (t.task_category === "仕込み" && !t.product_id ? "sonota" : KUBUN_CLASS[t.task_category] || "sonota");
+  const isCake = t.task_category === "オーダーケーキ";
+  const doneCls = t.status === "完了" ? " done" : "";
+  let badges = "";
+  if (t.is_carryover && t.status !== "完了") badges += `<span class="badge carry">${mmdd(t.plan_date)}から持ち越し</span>`;
+  if (t.badge) badges += `<span class="badge time">${esc(t.badge)}</span>`;
+  if (t.status === "仕込中") badges += `<span class="badge running">作業中 ${elapsedMin(t)}分</span>`;
+  if (t.status === "完了" && t.actual_minutes) badges += `<span class="badge">実績 ${t.actual_minutes}分</span>`;
+
+  const name = esc(t.item_name || "（名称なし）");
+  const batch = !t.title && t.batch_count ? ` ×${Number(t.batch_count)}バッチ` : "";
+  const memo = t.memo ? `<div class="detail">${esc(t.memo)}</div>` : "";
+
+  let row = "";
+  if (!isCake) {
+    if (t.status === "予定") {
+      row = `<div class="row"><button class="btn-start" onclick="doStart('${t.id}')">▶ 開始</button></div>`;
+    } else if (t.status === "仕込中") {
+      row = `<div class="row">
+        <span class="chip ${t.member_id ? "setted" : ""}" onclick="openMember('${t.id}')">担当：${esc(t.member_name || "—")}</span>
+        <button class="btn-finish" onclick="doFinish('${t.id}')">✔ 完了</button>
+        <button class="btn-revert" onclick="doRevert('${t.id}')">戻す</button></div>`;
+    } else {
+      const qty = t.completed_quantity != null ? `できあがり ${Number(t.completed_quantity)}個` : "できあがり 予定どおり";
+      const qtyChip = t.task_category === "仕込み" ? `<span class="qty-chip" onclick="editQty('${t.id}')">${qty}</span>` : "";
+      row = `<div class="row">${qtyChip}
+        <span class="chip ${t.member_id ? "setted" : ""}" onclick="openMember('${t.id}')">担当：${esc(t.member_name || "—")}</span>
+        <button class="btn-revert" onclick="doRevert('${t.id}')">戻す</button></div>`;
+    }
+  }
+  return `<div class="card ${cls}${doneCls}">
+    <span class="kubun">${esc(t.task_category)}</span>${badges}
+    <div class="title">${name}${batch}</div>${memo}${row}</div>`;
+}
+
+function elapsedMin(t) {
+  return Math.max(0, Math.floor((Date.now() - new Date(t.actual_start).getTime()) / 60000));
+}
+
+/* ---------- 操作（1タップ原則。先に画面を進め、失敗したら戻してトースト） ---------- */
+
+async function act(fn, args, apply) {
+  const prev = JSON.parse(JSON.stringify(tasks));
+  apply();
+  render();
+  try { await rpc(fn, args); await load(); }
+  catch (e) { tasks = prev; render(); toast("通信エラー：もう一度お試しください"); console.error(e); }
+}
+const findT = (id) => tasks.find((x) => x.id === id);
+
+function doStart(id) {
+  act("fn_start_plan", { p_plan_id: id }, () => {
+    const t = findT(id); t.status = "仕込中"; t.actual_start = new Date().toISOString();
+  });
+}
+function doFinish(id) {
+  act("fn_finish_plan", { p_plan_id: id }, () => {
+    const t = findT(id); t.status = "完了";
+    t.actual_minutes = Math.max(1, elapsedMin(t));
+  });
+}
+function doRevert(id) {
+  act("fn_revert_plan", { p_plan_id: id }, () => {
+    const t = findT(id);
+    if (t.status === "完了") { t.status = "仕込中"; t.actual_minutes = null; }
+    else { t.status = "予定"; t.actual_start = null; }
+  });
+}
+function editQty(id) {
+  const t = findT(id);
+  const v = prompt("できあがり個数（予定と違うときだけ）", t.completed_quantity ?? "");
+  if (v === null || v === "") return;
+  act("fn_set_qty", { p_plan_id: id, p_qty: Number(v) }, () => { t.completed_quantity = Number(v); });
+}
+
+/* ---------- 担当者（後追いチップ） ---------- */
+
+function openMember(id) {
+  memberTarget = id;
+  $("member-grid").innerHTML =
+    members.map((m) => `<button onclick="setMember('${m.id}')">${esc(m.display_name)}</button>`).join("") +
+    `<button class="other" onclick="setMember(null)">（なし）</button>`;
+  show("sheet-member");
+}
+function setMember(mid) {
+  closeSheets();
+  const t = findT(memberTarget);
+  act("fn_set_member", { p_plan_id: memberTarget, p_member_id: mid }, () => {
+    t.member_id = mid;
+    t.member_name = mid ? members.find((m) => m.id === mid)?.display_name : null;
+  });
+}
+
+/* ---------- ＋臨時で仕込む ---------- */
+
+async function openProductSheet() {
+  await loadProducts();
+  $("product-grid").innerHTML =
+    products.map((p) => `<button onclick="pickProduct('${p.id}')">${esc(p.name)}</button>`).join("") +
+    `<button class="other" onclick="pickOther()">その他（自由入力）</button>`;
+  show("sheet-product");
+}
+function pickProduct(pid) {
+  pendingProduct = products.find((p) => p.id === pid);
+  $("batch-title").textContent = `${pendingProduct.name}：バッチ数は？`;
+  hide("sheet-product"); show("sheet-batch");
+}
+async function quickAdd(n) {
+  closeSheets();
+  try {
+    await rpc("fn_quick_plan", { p_product_id: pendingProduct.id, p_batches: n });
+    await load();
+  } catch (e) { toast("登録に失敗しました"); console.error(e); }
+}
+async function pickOther() {
+  const v = prompt("何を仕込む？（自由入力）");
+  closeSheets();
+  if (!v) return;
+  try {
+    await rpc("fn_quick_plan", { p_title: v });
+    await load();
+  } catch (e) { toast("登録に失敗しました"); console.error(e); }
+}
+
+function show(id) { $("sheetbg").style.display = "block"; $(id).style.display = "block"; }
+function hide(id) { $(id).style.display = "none"; }
+function closeSheets() {
+  for (const id of ["sheet-product", "sheet-batch", "sheet-member"]) hide(id);
+  $("sheetbg").style.display = "none";
+}
+
+/* ---------- 起動・60秒自動更新（看板モード＝genba確定値） ---------- */
+
+if (requireLogin()) {
+  load().catch((e) => { $("list").innerHTML = `<div class="empty">読み込みエラー：${esc(e.message)}</div>`; });
+  setInterval(() => load().catch(() => {}), 60000);
+  setInterval(render, 30000); // 経過時間バッジの更新
+}
+</script>
+</body>
+</html>

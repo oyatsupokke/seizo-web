@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ログイン — 製造管理</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header><h1>製造管理 — ログイン</h1><div class="date">店アカウントでログインします（共用端末はログインしっぱなしでOK）</div></header>
+<main>
+  <form id="form">
+    <label>メールアドレス</label>
+    <input type="email" id="email" autocomplete="username" required>
+    <label>パスワード</label>
+    <input type="password" id="password" autocomplete="current-password" required>
+    <div style="margin-top:20px"><button class="btn-primary" type="submit">ログイン</button></div>
+    <p id="err" style="color:#d94141; font-size:.85rem;"></p>
+  </form>
+</main>
+<script src="api.js"></script>
+<script>
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  $("err").textContent = "";
+  try {
+    await login($("email").value.trim(), $("password").value);
+    location.href = "index.html";
+  } catch (err) { $("err").textContent = err.message; }
+});
+if (session()) location.href = "index.html";
+</script>
+</body>
+</html>

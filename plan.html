@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>予定登録・一覧 — 製造管理</title>
+<link rel="stylesheet" href="app.css">
+<style>
+  .week-day{margin:14px 0 4px; font-size:.9rem; font-weight:700; color:#555;}
+  .week-day.today{color:var(--c-shikomi);}
+  .mini-card{background:#fff; border-radius:10px; padding:8px 12px; margin:6px 0; font-size:.9rem; border-left:6px solid #ccc; display:flex; justify-content:space-between; align-items:center; gap:8px;}
+  .mini-card .del{color:#d94141; font-size:.8rem; text-decoration:underline; cursor:pointer; flex:0 0 auto;}
+  .mini-card.st-done{opacity:.5;}
+  .wk-nav{display:flex; gap:8px; align-items:center; margin:10px 0;}
+  .wk-nav button{flex:0 0 auto; padding:8px 16px; font-size:.9rem; background:#efeaf9; color:var(--c-shikomi);}
+  .wk-nav .label{flex:1; text-align:center; font-weight:700; font-size:.9rem;}
+</style>
+</head>
+<body>
+<header>
+  <h1>予定登録・一覧</h1>
+  <div class="nav"><a href="index.html">🏠 今日やること</a></div>
+</header>
+<main>
+  <form id="form">
+    <label>日付</label>
+    <input type="date" id="f-date" required>
+    <label>区分</label>
+    <div class="seg" id="f-kubun"></div>
+    <label>商品</label>
+    <input type="text" id="f-search" placeholder="商品名で検索（マスタ外は自由入力してそのまま登録）" autocomplete="off">
+    <div class="grid" id="f-products" style="margin-top:8px"></div>
+    <div class="detail" id="f-yield" style="margin:6px 2px"></div>
+    <label>バッチ数</label>
+    <input type="number" id="f-batch" value="1" min="0.5" step="0.5">
+    <label>メモ（任意）</label>
+    <input type="text" id="f-memo">
+    <div style="margin-top:18px"><button class="btn-primary" type="submit">登録する</button></div>
+    <p id="f-msg" style="font-size:.85rem; color:var(--c-gift); font-weight:700;"></p>
+  </form>
+
+  <div class="section-label" style="font-size:1rem; margin-top:28px">📅 週の予定</div>
+  <div class="wk-nav">
+    <button onclick="moveWeek(-1)">← 前の週</button>
+    <div class="label" id="wk-label"></div>
+    <button onclick="moveWeek(1)">次の週 →</button>
+  </div>
+  <div id="week"></div>
+</main>
+<div class="toast" id="toast"></div>
+
+<script src="api.js"></script>
+<script>
+const KUBUNS = ["仕込み", "オーダーケーキ", "プチギフト", "発送"];
+let products = [], selProduct = null, selKubun = "仕込み", weekStart = null;
+
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),2500); }
+
+function renderKubun() {
+  $("f-kubun").innerHTML = KUBUNS.map((k) =>
+    `<button type="button" class="${k === selKubun ? "selected" : ""}" onclick="setKubun('${k}')">${k}</button>`).join("");
+}
+function setKubun(k) { selKubun = k; renderKubun(); }
+
+function renderProducts() {
+  const q = $("f-search").value.trim();
+  const hits = q ? products.filter((p) => p.name.includes(q)) : products.slice(0, 8);
+  $("f-products").innerHTML = hits.slice(0, 8).map((p) =>
+    `<button type="button" class="${selProduct?.id === p.id ? "selected" : ""}" onclick="pick('${p.id}')">${esc(p.name)}</button>`).join("");
+}
+function pick(pid) {
+  selProduct = products.find((p) => p.id === pid);
+  $("f-search").value = selProduct.name;
+  $("f-yield").textContent = selProduct.yield_per_batch ? `1バッチ = ${Number(selProduct.yield_per_batch)}個` : "";
+  renderProducts();
+}
+
+$("f-search").addEventListener("input", () => { selProduct = null; $("f-yield").textContent = ""; renderProducts(); });
+
+$("form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const date = $("f-date").value;
+  const text = $("f-search").value.trim();
+  if (!date || (!selProduct && !text)) { toast("日付と商品（または自由入力）を入れてください"); return; }
+  const row = {
+    plan_date: date,
+    task_category: selKubun,
+    batch_count: Number($("f-batch").value) || 1,
+    memo: $("f-memo").value.trim() || null,
+    source: "app",
+    tenant_id: await myTenantId(),
+  };
+  if (selProduct) row.product_id = selProduct.id; else row.title = text;
+  try {
+    await insert("production_plans", row);
+    $("f-msg").textContent = `登録しました：${mmdd(date)} ${selKubun}「${selProduct ? selProduct.name : text}」`;
+    // 連続登録モード：日付・区分は保持、商品・メモだけクリア
+    selProduct = null; $("f-search").value = ""; $("f-memo").value = ""; $("f-yield").textContent = "";
+    renderProducts(); loadWeek();
+  } catch (err) { toast("登録に失敗しました"); console.error(err); }
+});
+
+let _tid = null;
+async function myTenantId() {
+  if (!_tid) _tid = (await rpc("fn_my_tenant_id")) || null;
+  return _tid;
+}
+
+/* ---------- 週一覧 ---------- */
+
+function startOfWeek(d) {
+  const x = new Date(d); x.setDate(x.getDate() - ((x.getDay() + 6) % 7)); return x; // 月曜始まり
+}
+function iso(d){ return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; }
+function moveWeek(n){ weekStart.setDate(weekStart.getDate() + n*7); loadWeek(); }
+
+async function loadWeek() {
+  const from = iso(weekStart);
+  const endD = new Date(weekStart); endD.setDate(endD.getDate() + 6);
+  const to = iso(endD);
+  $("wk-label").textContent = `${mmdd(from)} 〜 ${mmdd(to)}`;
+  const rows = await rest(`production_plans?select=*,products(name),ingredients(name)&plan_date=gte.${from}&plan_date=lte.${to}&order=plan_date,created_at`);
+  const byDay = {};
+  for (const r of rows) (byDay[r.plan_date] ||= []).push(r);
+  const days = ["月","火","水","木","金","土","日"];
+  let html = "";
+  for (let i = 0; i < 7; i++) {
+    const d = new Date(weekStart); d.setDate(d.getDate() + i);
+    const key = iso(d);
+    const isToday = key === todayStr();
+    html += `<div class="week-day ${isToday ? "today" : ""}">${mmdd(key)}（${days[i]}）${isToday ? " — 今日" : ""}</div>`;
+    for (const r of (byDay[key] || [])) {
+      const name = r.item_name || r.title || r.products?.name || r.ingredients?.name || "（名称なし）";
+      const cls = KUBUN_CLASS[r.task_category] || "sonota";
+      const st = r.status === "完了" ? "st-done" : "";
+      const batch = !r.title && r.batch_count ? ` ×${Number(r.batch_count)}` : "";
+      const canDel = r.status === "予定" && r.source === "app";
+      html += `<div class="mini-card ${st}" style="border-left-color:var(--c-${cls})">
+        <span><span class="kubun" style="background:var(--c-${cls})">${esc(r.task_category)}</span>
+        ${esc(name)}${batch}${r.status !== "予定" ? `・${r.status}` : ""}</span>
+        ${canDel ? `<span class="del" onclick="delPlan('${r.id}')">削除</span>` : ""}</div>`;
+    }
+    if (!(byDay[key] || []).length) html += `<div class="detail" style="margin:2px 6px">—</div>`;
+  }
+  $("week").innerHTML = html;
+}
+
+async function delPlan(id) {
+  if (!confirm("この予定を削除しますか？")) return;
+  try {
+    await apiFetch(`/rest/v1/production_plans?id=eq.${id}`, { method: "DELETE" });
+    loadWeek();
+  } catch (e) { toast("削除に失敗しました"); }
+}
+
+/* ---------- 起動 ---------- */
+
+if (requireLogin()) {
+  $("f-date").value = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return iso(d); })(); // デフォルト明日
+  weekStart = startOfWeek(new Date());
+  renderKubun();
+  rest("products?select=id,name,yield_per_batch&is_active=eq.true&order=name&limit=200")
+    .then((p) => { products = p; renderProducts(); });
+  loadWeek().catch((e) => toast("読み込みエラー"));
+}
+</script>
+</body>
+</html>
