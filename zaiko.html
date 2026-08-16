@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>在庫・発注 — 製造管理</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<header>
+  <h1>在庫・発注</h1>
+  <div class="date" id="today"></div>
+  <div class="nav">
+    <a href="index.html">🏠 今日やること</a>
+    <a href="tanaoroshi.html">📋 棚卸</a>
+  </div>
+</header>
+<main>
+  <div class="section-label">アラート</div>
+  <div id="alerts"><div class="empty">読み込み中…</div></div>
+
+  <div class="section-label">材料をさがす（現在庫・予測）</div>
+  <input type="text" id="search" placeholder="材料名で検索（例：バター）" oninput="renderSearch()">
+  <div id="search-result"></div>
+
+  <div id="uncovered"></div>
+</main>
+<div class="fab" onclick="openArrivalSheet()">📦 入荷を記録</div>
+
+<div class="sheet-bg" id="sheetbg" onclick="closeSheets()"></div>
+<div class="sheet" id="sheet-arrival-pick">
+  <h2>何が入荷した？（連続で記録できます）</h2>
+  <div id="arrival-today"></div>
+  <input type="text" id="arrival-search" placeholder="材料名で検索" oninput="renderArrivalList()">
+  <div class="grid" id="arrival-grid" style="margin-top:10px;"></div>
+</div>
+<div class="sheet" id="sheet-arrival-qty">
+  <h2 id="arrival-title">数量は？</h2>
+  <div class="qty-row">
+    <input type="number" id="arrival-qty" inputmode="decimal" step="0.5" min="0">
+    <span class="unit-label" id="arrival-unit"></span>
+  </div>
+  <div class="hint" id="arrival-hint"></div>
+  <div class="row">
+    <button class="btn-finish" onclick="saveArrival()">✔ 入荷を記録</button>
+    <button class="btn-revert" onclick="backToPick()">← 材料選択に戻る</button>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="api.js"></script>
+<script>
+let alerts = [], stock = [], lastArrival = {}, pendingIng = null;
+let todayArrivals = [];   // 今日記録した入荷 [{id, ingredient_id, grams}]（取消用）
+let myTenantId = null;
+let toastTimer = null;
+
+function toast(msg, undoFn) {
+  const t = $("toast");
+  t.innerHTML = esc(msg) + (undoFn ? ' <button class="toast-undo" onclick="toastUndo()">取消</button>' : "");
+  t.classList.toggle("clickable", !!undoFn);
+  window._toastUndo = undoFn || null;
+  t.classList.add("show");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.remove("show"), undoFn ? 6000 : 2500);
+}
+async function toastUndo() {
+  $("toast").classList.remove("show");
+  if (window._toastUndo) { const f = window._toastUndo; window._toastUndo = null; await f(); }
+}
+
+async function load() {
+  const [a, s, units, la, un] = await Promise.all([
+    rest("v_order_alerts?select=*&order=alert_kind.desc,order_by_date"),
+    rest("v_projected_stock?select=*&order=name"),
+    // v_projected_stockに発注単位の列が無いのでingredientsから補完
+    rest("ingredients?is_active=eq.true&select=id,order_unit,order_unit_to_g"),
+    rest("v_last_arrival?select=*"),
+    rest("v_uncovered_plans?select=*&order=plan_date.desc"),
+  ]);
+  const unitMap = Object.fromEntries(units.map((u) => [u.id, u]));
+  alerts = a;
+  stock = s.map((row) => ({ ...row, ...(unitMap[row.ingredient_id] || {}) }));
+  lastArrival = Object.fromEntries(la.map((x) => [x.ingredient_id, { g: x.last_amount_g, at: x.occurred_at }]));
+  if (!myTenantId) myTenantId = await rpc("fn_my_tenant_id");
+  // 今日記録済みの入荷（リロードしても取消・✔表示が続くように）
+  todayArrivals = (await rest(`inventory_transactions?kind=eq.入荷&occurred_at=gte.${todayStr()}&select=id,ingredient_id,delta_g&order=occurred_at.desc`))
+    .map((t) => ({ id: t.id, ingredient_id: t.ingredient_id, grams: t.delta_g }));
+  renderAlerts();
+  renderSearch();
+  renderUncovered(un);
+}
+
+/* ---------- 表示ユーティリティ：gを発注単位に換算して読みやすく ---------- */
+
+function ingOf(id) { return stock.find((s) => s.ingredient_id === id); }
+
+function fmtAmount(ing, g) {
+  if (g == null) return "—";
+  if (ing?.order_unit && ing?.order_unit_to_g > 0) {
+    const n = g / ing.order_unit_to_g;
+    const r = Math.round(n * 10) / 10;
+    return `${r}${ing.order_unit}（${Math.round(g)}g）`;
+  }
+  return `${Math.round(g)}g`;
+}
+
+/* ---------- アラート（不足=赤・下限=黄） ---------- */
+
+function renderAlerts() {
+  const el = $("alerts");
+  if (!alerts.length) {
+    el.innerHTML = '<div class="empty" style="padding:20px;">アラートはありません</div>';
+    return;
+  }
+  el.innerHTML = alerts.map((a) => {
+    const ing = ingOf(a.ingredient_id);
+    const cls = a.alert_kind === "不足" ? "alert-red" : "alert-yellow";
+    const when = a.alert_kind === "不足"
+      ? `${mmdd(a.runout_date)} に不足`
+      : "発注点を下回り・早めに発注";
+    // 下限のorder_by_dateは定義上つねに過去日になるので不足のみ表示
+    const orderBy = a.alert_kind === "不足" && a.order_by_date ? `／${mmdd(a.order_by_date)}までに発注` : "";
+    return `<div class="alert-row ${cls}">
+      <div class="alert-main">
+        <div class="alert-name">${esc(a.name)}</div>
+        <div class="alert-sub">予測 ${fmtAmount(ing, a.projected_g)}・${when}${orderBy}</div>
+      </div>
+      <button class="btn-arrive" onclick="pickIngredient('${a.ingredient_id}')">入荷した</button>
+    </div>`;
+  }).join("");
+}
+
+/* ---------- 材料検索 → 現在庫・予測推移（テキスト） ---------- */
+
+async function renderSearch() {
+  const q = $("search").value.trim();
+  const el = $("search-result");
+  if (!q) { el.innerHTML = ""; return; }
+  const hits = stock.filter((s) => s.name.includes(q)).slice(0, 10);
+  if (!hits.length) { el.innerHTML = '<div class="empty" style="padding:16px;">見つかりません</div>'; return; }
+  el.innerHTML = hits.map((s) => `<div class="stock-row" onclick="showDetail('${s.ingredient_id}', this)">
+      <div class="alert-name">${esc(s.name)}</div>
+      <div class="alert-sub">現在庫 ${fmtAmount(s, s.current_g)} → 予測 ${fmtAmount(s, s.projected_g)}</div>
+      <div class="stock-detail" id="detail-${s.ingredient_id}"></div>
+    </div>`).join("");
+}
+
+async function showDetail(id, row) {
+  const el = $("detail-" + id);
+  if (el.innerHTML) { el.innerHTML = ""; return; }
+  el.innerHTML = "読み込み中…";
+  try {
+    const plans = await rest(`v_planned_consumption?ingredient_id=eq.${id}&select=plan_date,planned_g&order=plan_date`);
+    const s = ingOf(id);
+    const lines = plans.map((p) => `${mmdd(p.plan_date)} の仕込みで −${Math.round(p.planned_g)}g`);
+    if (s?.incoming_g > 0) lines.push(`入荷予定 +${Math.round(s.incoming_g)}g`);
+    el.innerHTML = lines.length ? lines.map(esc).join("<br>") : "今後の予定消費はありません";
+  } catch { el.innerHTML = "取得エラー"; }
+}
+
+/* ---------- レシピ未登録のまま完了した仕込み（穴の見える化） ---------- */
+
+function renderUncovered(un) {
+  const el = $("uncovered");
+  if (!un.length) { el.innerHTML = ""; return; }
+  const names = [...new Set(un.map((u) => u.item_name))];
+  el.innerHTML = `<div class="section-label">⚠ 引落なしで完了した仕込み（今月 ${un.length}件）</div>
+    <div class="uncovered-box">レシピ未登録のため在庫が引かれていません：${esc(names.join("・"))}</div>`;
+}
+
+/* ---------- 入荷の記録（夕方まとめて連続入力・前回量デフォルト） ---------- */
+
+function openArrivalSheet() {
+  $("arrival-search").value = "";
+  renderArrivalList();
+  show("sheet-arrival-pick");
+}
+
+function renderArrivalList() {
+  const q = $("arrival-search").value.trim();
+  // 購入材料のみ（半製品の入庫は仕込み完了で自動計上される）
+  let list = stock.filter((s) => s.kind === "購入材料");
+  if (q) list = list.filter((s) => s.name.includes(q));
+  const arrivedIds = todayArrivals.map((t) => t.ingredient_id);
+  // 並び順：前回入荷が新しい順（定期便の材料が上位に固定され、数回使えばほぼ無検索で回る）
+  list.sort((a, b) => {
+    const ta = lastArrival[a.ingredient_id]?.at, tb = lastArrival[b.ingredient_id]?.at;
+    if (!!tb - !!ta) return !!tb - !!ta;
+    if (ta && tb && ta !== tb) return tb.localeCompare(ta);
+    return a.name.localeCompare(b.name, "ja");
+  });
+  // 今日記録した分の一覧（行ごとに取消できる＝入れ間違いの救済）
+  const todayHtml = todayArrivals.length
+    ? `<div class="section-label" style="margin-top:0;">今日記録した入荷</div>` +
+      todayArrivals.map((t) => {
+        const ing = ingOf(t.ingredient_id);
+        return `<div class="today-arrival-row">✔ ${esc(ing?.name || "？")} ${fmtAmount(ing, t.grams)}
+          <button class="btn-revert" onclick="deleteArrival('${t.id}')">取消</button></div>`;
+      }).join("")
+    : "";
+  $("arrival-today").innerHTML = todayHtml;
+  $("arrival-grid").innerHTML = list.slice(0, 30).map((s) =>
+    `<button onclick="pickIngredient('${s.ingredient_id}')">${arrivedIds.includes(s.ingredient_id) ? "✔ " : ""}${esc(s.name)}</button>`
+  ).join("") || '<div class="empty">見つかりません</div>';
+}
+
+async function deleteArrival(txId) {
+  try {
+    await apiFetch(`/rest/v1/inventory_transactions?id=eq.${txId}`, { method: "DELETE" });
+    todayArrivals = todayArrivals.filter((t) => t.id !== txId);
+    renderArrivalList();
+    toast("入荷の記録を取り消しました");
+    load().catch(() => {});
+  } catch (e) { toast("取消に失敗しました"); console.error(e); }
+}
+
+function pickIngredient(id) {
+  pendingIng = ingOf(id);
+  if (!pendingIng) return;
+  $("arrival-title").textContent = `${pendingIng.name}：数量は？`;
+  const useUnit = pendingIng.order_unit && pendingIng.order_unit_to_g > 0;
+  $("arrival-unit").textContent = useUnit ? pendingIng.order_unit : "g";
+  const lastG = lastArrival[id]?.g;
+  const input = $("arrival-qty");
+  input.value = lastG != null
+    ? (useUnit ? Math.round((lastG / pendingIng.order_unit_to_g) * 10) / 10 : Math.round(lastG))
+    : "";
+  $("arrival-hint").textContent = lastG != null
+    ? `前回の入荷と同じ量を入れてあります（前回 ${fmtAmount(pendingIng, lastG)}）`
+    : (useUnit ? `1${pendingIng.order_unit} = ${pendingIng.order_unit_to_g}g` : "グラムで入力してください");
+  hide("sheet-arrival-pick");
+  show("sheet-arrival-qty");
+  input.focus();
+}
+
+async function saveArrival() {
+  const v = Number($("arrival-qty").value);
+  if (!v || v <= 0) { toast("数量を入れてください"); return; }
+  const useUnit = pendingIng.order_unit && pendingIng.order_unit_to_g > 0;
+  const grams = useUnit ? v * pendingIng.order_unit_to_g : v;
+  try {
+    // 直接insert（idが返る＝トーストの「取消」で1タップ削除できる）
+    const rows = await insert("inventory_transactions", [{
+      tenant_id: myTenantId, ingredient_id: pendingIng.ingredient_id, delta_g: grams, kind: "入荷",
+    }]);
+    const txId = rows[0].id;
+    lastArrival[pendingIng.ingredient_id] = { g: grams, at: new Date().toISOString() };
+    todayArrivals.unshift({ id: txId, ingredient_id: pendingIng.ingredient_id, grams });
+    toast(`${pendingIng.name} ${fmtAmount(pendingIng, grams)} 入荷を記録しました`, () => deleteArrival(txId));
+    // 連続入力：材料選択に戻る（納品書を見ながら次々入れる運用）
+    backToPick();
+    load().catch(() => {});
+  } catch (e) { toast("記録に失敗しました"); console.error(e); }
+}
+
+function backToPick() {
+  hide("sheet-arrival-qty");
+  $("arrival-search").value = "";
+  renderArrivalList();
+  show("sheet-arrival-pick");
+}
+
+function show(id) { $("sheetbg").style.display = "block"; $(id).style.display = "block"; }
+function hide(id) { $(id).style.display = "none"; }
+function closeSheets() {
+  for (const id of ["sheet-arrival-pick", "sheet-arrival-qty"]) hide(id);
+  $("sheetbg").style.display = "none";
+}
+
+if (requireLogin()) {
+  $("today").textContent = jpDate(new Date());
+  load().catch((e) => { $("alerts").innerHTML = `<div class="empty">読み込みエラー：${esc(e.message)}</div>`; });
+}
+</script>
+</body>
+</html>

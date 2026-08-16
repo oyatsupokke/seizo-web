@@ -12,7 +12,8 @@
   <div class="date" id="today"></div>
   <div class="progress-wrap"><div class="progress-bar" id="pbar"></div></div>
   <div class="progress-label" id="plabel"></div>
-  <div class="nav"><a href="plan.html">📅 予定登録・一覧</a></div>
+  <div class="nav"><a href="plan.html">📅 予定登録・一覧</a><a href="zaiko.html">📦 在庫・発注</a><a href="tanaoroshi.html">📋 棚卸</a></div>
+  <div id="alertband"></div>
 </header>
 <main id="list"><div class="empty">読み込み中…</div></main>
 <div class="fab" onclick="openProductSheet()">＋ 臨時で仕込む</div>
@@ -29,6 +30,7 @@
     <button onclick="quickAdd(2)">2バッチ</button>
     <button onclick="quickAdd(3)">3バッチ</button>
     <button onclick="quickAdd(4)">4バッチ</button>
+    <button class="other" onclick="quickAddOther()">その他の数</button>
   </div>
 </div>
 <div class="sheet" id="sheet-member">
@@ -50,12 +52,22 @@ function toast(msg) {
 }
 
 async function load() {
-  const [t, m] = await Promise.all([
+  const [t, m, al] = await Promise.all([
     rest("v_today_tasks?select=*"),
     rest("members?select=id,display_name&is_active=eq.true&order=sort_order"),
+    rest("v_order_alerts?alert_kind=eq.不足&select=name,runout_date&order=runout_date").catch(() => []),
   ]);
   tasks = t; members = m;
+  renderAlertBand(al);
   render();
+}
+
+/* 不足アラートの赤帯（初回棚卸の確定まではビュー側で0件＝非表示） */
+function renderAlertBand(al) {
+  const el = $("alertband");
+  if (!al.length) { el.innerHTML = ""; return; }
+  const head = al[0].name + (al.length > 1 ? ` ほか${al.length - 1}件` : "");
+  el.innerHTML = `<a class="alert-band" href="zaiko.html">⚠ 材料不足：${esc(head)} — タップで確認</a>`;
 }
 
 async function loadProducts() {
@@ -89,7 +101,13 @@ function cardHtml(t) {
   if (t.status === "完了" && t.actual_minutes) badges += `<span class="badge">実績 ${t.actual_minutes}分</span>`;
 
   const name = esc(t.item_name || "（名称なし）");
-  const batch = !t.title && t.batch_count ? ` ×${Number(t.batch_count)}バッチ` : "";
+  // 仕込みカードのバッチ数はタップで修正可（完了済みなら引落も自動で再計算）
+  const editableBatch = t.task_category === "仕込み" && !t.title && t.batch_count != null;
+  const batch = !t.title && t.batch_count
+    ? (editableBatch
+        ? ` <span class="batch-chip" onclick="editBatches('${t.id}')">×${Number(t.batch_count)}バッチ ✎</span>`
+        : ` ×${Number(t.batch_count)}バッチ`)
+    : "";
   const memo = t.memo ? `<div class="detail">${esc(t.memo)}</div>` : "";
 
   let row = "";
@@ -147,6 +165,14 @@ function doRevert(id) {
     else { t.status = "予定"; t.actual_start = null; }
   });
 }
+let batchEditTarget = null; // バッチ数シートの使い回し：nullなら臨時仕込み、入っていれば修正
+
+function editBatches(id) {
+  batchEditTarget = id;
+  const t = findT(id);
+  $("batch-title").textContent = `${t.item_name || ""}：実際に仕込んだバッチ数は？`;
+  show("sheet-batch");
+}
 function editQty(id) {
   const t = findT(id);
   const v = prompt("できあがり個数（予定と違うときだけ）", t.completed_quantity ?? "");
@@ -187,11 +213,22 @@ function pickProduct(pid) {
   hide("sheet-product"); show("sheet-batch");
 }
 async function quickAdd(n) {
+  if (batchEditTarget) { // 修正モード：引落も自動で再計算される（fn_set_batches）
+    const id = batchEditTarget;
+    closeSheets();
+    act("fn_set_batches", { p_plan_id: id, p_batches: n }, () => { findT(id).batch_count = n; });
+    return;
+  }
   closeSheets();
   try {
     await rpc("fn_quick_plan", { p_product_id: pendingProduct.id, p_batches: n });
     await load();
   } catch (e) { toast("登録に失敗しました"); console.error(e); }
+}
+function quickAddOther() {
+  const v = prompt("バッチ数");
+  if (v === null || v === "" || Number(v) <= 0) { closeSheets(); return; }
+  quickAdd(Number(v));
 }
 async function pickOther() {
   const v = prompt("何を仕込む？（自由入力）");
@@ -208,6 +245,7 @@ function hide(id) { $(id).style.display = "none"; }
 function closeSheets() {
   for (const id of ["sheet-product", "sheet-batch", "sheet-member"]) hide(id);
   $("sheetbg").style.display = "none";
+  batchEditTarget = null;
 }
 
 /* ---------- 起動・60秒自動更新（看板モード＝genba確定値） ---------- */

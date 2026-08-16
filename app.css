@@ -58,4 +58,42 @@ label{font-size:.85rem; font-weight:700; display:block; margin:14px 0 6px;}
 .seg{display:flex; gap:8px; flex-wrap:wrap;}
 .seg button{flex:1 0 40%; padding:12px 4px; background:#f4f1ea; color:var(--ink); font-size:.9rem;}
 .seg button.selected{background:var(--c-shikomi); color:#fff;}
+/* Phase C：在庫・棚卸 */
+.alert-band{display:block; margin:8px 0 0; background:#d94141; color:#fff; font-weight:700; font-size:.95rem; padding:12px 14px; border-radius:12px; text-decoration:none;}
+.alert-row{background:var(--card); border-radius:12px; margin:8px 0; padding:10px 12px; display:flex; align-items:center; gap:10px; border-left:8px solid #ccc; box-shadow:0 1px 3px rgba(0,0,0,.08);}
+.alert-row.alert-red{border-left-color:#d94141; background:#fdf0f0;}
+.alert-row.alert-yellow{border-left-color:#e6a817; background:#fdf8ec;}
+.alert-main{flex:1; min-width:0;}
+.alert-name{font-weight:700; font-size:1rem;}
+.alert-sub{font-size:.8rem; color:var(--muted); margin-top:2px;}
+.btn-arrive{flex:0 0 auto; background:#fff; color:#2e7d32; border:2px solid #2e7d32; font-size:.85rem; padding:8px 14px;}
+.stock-row{background:var(--card); border-radius:12px; margin:8px 0; padding:10px 12px; box-shadow:0 1px 3px rgba(0,0,0,.08); cursor:pointer;}
+.stock-detail{font-size:.85rem; color:var(--muted); margin-top:6px; line-height:1.6;}
+.stock-detail:empty{display:none;}
+.uncovered-box{background:#f0ede7; border-radius:12px; padding:10px 12px; font-size:.85rem; color:#666;}
+.qty-row{display:flex; align-items:center; gap:8px; margin:8px 0;}
+.qty-row input{font-size:1.4rem; font-weight:700; text-align:right; flex:1;}
+.unit-label{font-size:1.1rem; font-weight:700; flex:0 0 auto; min-width:2em;}
+.hint{font-size:.8rem; color:var(--muted); margin:4px 0 8px;}
+.batch-chip{background:#f0ede7; border-radius:14px; font-size:.8rem; font-weight:400; padding:3px 10px; color:#666; cursor:pointer; white-space:nowrap;}
+/* 棚卸 */
+.stocktake-head{background:var(--card); border-radius:12px; padding:12px 14px; margin:8px 0; font-weight:700; box-shadow:0 1px 3px rgba(0,0,0,.08);}
+.loc-section{background:var(--card); border-radius:14px; margin:12px 0; padding:6px 12px 10px; box-shadow:0 1px 3px rgba(0,0,0,.08);}
+.loc-section.closed{opacity:.6;}
+.loc-header{display:flex; align-items:center; justify-content:space-between; padding:8px 0; border-bottom:1px solid #eee;}
+.loc-name{font-weight:700; font-size:1rem;}
+.loc-done{color:#2e7d32; font-weight:700; font-size:.9rem;}
+.btn-close-loc{flex:0 0 auto; background:#2e7d32; color:#fff; font-size:.85rem; padding:8px 14px;}
+.tana-row{display:flex; align-items:center; gap:8px; padding:10px 0; border-bottom:1px solid #f2efe9;}
+.tana-row:last-child{border-bottom:none;}
+.tana-main{flex:1; display:flex; align-items:center; justify-content:space-between; gap:8px; cursor:pointer; min-width:0;}
+.tana-name{font-size:.95rem;}
+.tana-val{font-size:.85rem; color:var(--muted); flex:0 0 auto;}
+.tana-row.measured .tana-val{color:#2e7d32; font-weight:700;}
+.btn-loc{flex:0 0 auto; background:#eee9ff; color:#5b3fa8; font-size:.8rem; padding:8px 12px;}
+.confirm-area{margin:20px 0 40px;}
+.toast.clickable{pointer-events:auto;}
+.toast-undo{background:#fff; color:#333; font-size:.8rem; font-weight:700; padding:4px 12px; border-radius:8px; flex:0 0 auto; margin-left:8px;}
+.today-arrival-row{display:flex; align-items:center; justify-content:space-between; gap:8px; background:#eef7ee; border-radius:10px; padding:8px 12px; margin:6px 0; font-size:.9rem; color:#2e7d32; font-weight:700;}
+.confirm-area button:disabled{opacity:.45; cursor:default;}
 @media (min-width:700px){ main, header{max-width:640px; margin:0 auto;} .title{font-size:1.3rem;} button{font-size:1.15rem; padding:16px 0;} .fab{max-width:616px; left:50%; transform:translateX(-50%);} }
