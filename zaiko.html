@@ -16,6 +16,7 @@
   </div>
 </header>
 <main>
+  <div id="po-section"></div>
   <div class="section-label">アラート</div>
   <div id="alerts"><div class="empty">読み込み中…</div></div>
 
@@ -46,6 +47,17 @@
     <button class="btn-revert" onclick="backToPick()">← 材料選択に戻る</button>
   </div>
 </div>
+<div class="sheet" id="sheet-order-qty">
+  <h2 id="order-title">発注した数量は？</h2>
+  <div class="qty-row">
+    <input type="number" id="order-qty" inputmode="decimal" step="0.5" min="0">
+    <span class="unit-label" id="order-unit"></span>
+  </div>
+  <div class="hint" id="order-hint"></div>
+  <div class="row">
+    <button class="btn-finish" onclick="saveOrder()">✔ 発注を記録</button>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script src="api.js"></script>
@@ -69,15 +81,25 @@ async function toastUndo() {
   if (window._toastUndo) { const f = window._toastUndo; window._toastUndo = null; await f(); }
 }
 
+let openPOs = [];        // 発注済み・未入荷
+let lastOrder = {};      // ingredient_id -> {qty, unit}（発注数量のデフォルト用）
+
 async function load() {
-  const [a, s, units, la, un] = await Promise.all([
+  const [a, s, units, la, un, pos, recentPos] = await Promise.all([
     rest("v_order_alerts?select=*&order=alert_kind.desc,order_by_date"),
     rest("v_projected_stock?select=*&order=name"),
     // v_projected_stockに発注単位の列が無いのでingredientsから補完
     rest("ingredients?is_active=eq.true&select=id,order_unit,order_unit_to_g"),
     rest("v_last_arrival?select=*"),
     rest("v_uncovered_plans?select=*&order=plan_date.desc"),
+    rest("purchase_orders?status=eq.発注済&select=*&order=ordered_on"),
+    rest("purchase_orders?status=in.(発注済,入荷済)&select=ingredient_id,quantity,quantity_unit,ordered_on&order=ordered_on.desc&limit=200"),
   ]);
+  openPOs = pos;
+  lastOrder = {};
+  for (const p of recentPos) {
+    if (!lastOrder[p.ingredient_id]) lastOrder[p.ingredient_id] = { qty: p.quantity, unit: p.quantity_unit };
+  }
   const unitMap = Object.fromEntries(units.map((u) => [u.id, u]));
   alerts = a;
   stock = s.map((row) => ({ ...row, ...(unitMap[row.ingredient_id] || {}) }));
@@ -86,9 +108,124 @@ async function load() {
   // 今日記録済みの入荷（リロードしても取消・✔表示が続くように）
   todayArrivals = (await rest(`inventory_transactions?kind=eq.入荷&occurred_at=gte.${todayStr()}&select=id,ingredient_id,delta_g&order=occurred_at.desc`))
     .map((t) => ({ id: t.id, ingredient_id: t.ingredient_id, grams: t.delta_g }));
+  renderPOs();
   renderAlerts();
   renderSearch();
   renderUncovered(un);
+}
+
+/* ---------- 発注済み一覧（届いたらチェック） ---------- */
+
+const daysAgo = (iso) => Math.floor((new Date(todayStr()) - new Date(iso)) / 86400000);
+
+function renderPOs() {
+  const el = $("po-section");
+  if (!openPOs.length) { el.innerHTML = ""; return; }
+  el.innerHTML = `<div class="section-label">発注済み（届いたらチェック）</div>` +
+    openPOs.map((po) => {
+      const ing = ingOf(po.ingredient_id);
+      const stale = po.ordered_on && daysAgo(po.ordered_on) >= 5;
+      const qty = `${Number(po.quantity)}${po.quantity_unit || "g"}`;
+      return `<div class="alert-row po-row${stale ? " alert-yellow" : ""}">
+        <div class="alert-main" onclick="editPOQty('${po.id}')">
+          <div class="alert-name">${esc(ing?.name || "？")} ${qty}</div>
+          <div class="alert-sub">${po.ordered_on ? mmdd(po.ordered_on) + "発注" : ""}${stale ? "・<b>届いていませんか？</b>" : ""}（数量が違えばタップで修正）</div>
+        </div>
+        <button class="btn-arrive" onclick="poArrived('${po.id}')">✔ 届いた</button>
+        <button class="btn-revert" onclick="poCancel('${po.id}')">取消</button>
+      </div>`;
+    }).join("");
+}
+
+function poGrams(po, ing) {
+  // 発注単位が材料の発注単位と一致すればg換算、'g'ならそのまま
+  if (po.quantity_unit && po.quantity_unit !== "g" && ing?.order_unit_to_g > 0) return po.quantity * ing.order_unit_to_g;
+  return po.quantity;
+}
+
+async function poArrived(poId) {
+  const po = openPOs.find((p) => p.id === poId);
+  if (!po) return;
+  const ing = ingOf(po.ingredient_id);
+  const grams = poGrams(po, ing);
+  try {
+    const rows = await insert("inventory_transactions", [{
+      tenant_id: myTenantId, ingredient_id: po.ingredient_id, delta_g: grams, kind: "入荷",
+    }]);
+    const txId = rows[0].id;
+    await apiFetch(`/rest/v1/purchase_orders?id=eq.${poId}`, { method: "PATCH", body: JSON.stringify({ status: "入荷済" }) });
+    toast(`${ing?.name || ""} ${fmtAmount(ing, grams)} 入荷を記録しました`, async () => {
+      await apiFetch(`/rest/v1/inventory_transactions?id=eq.${txId}`, { method: "DELETE" });
+      await apiFetch(`/rest/v1/purchase_orders?id=eq.${poId}`, { method: "PATCH", body: JSON.stringify({ status: "発注済" }) });
+      load().catch(() => {});
+    });
+    load().catch(() => {});
+  } catch (e) { toast("記録に失敗しました"); console.error(e); }
+}
+
+async function poCancel(poId) {
+  try {
+    await apiFetch(`/rest/v1/purchase_orders?id=eq.${poId}`, { method: "PATCH", body: JSON.stringify({ status: "取消" }) });
+    toast("発注を取り消しました", async () => {
+      await apiFetch(`/rest/v1/purchase_orders?id=eq.${poId}`, { method: "PATCH", body: JSON.stringify({ status: "発注済" }) });
+      load().catch(() => {});
+    });
+    load().catch(() => {});
+  } catch (e) { toast("取消に失敗しました"); console.error(e); }
+}
+
+function editPOQty(poId) {
+  const po = openPOs.find((p) => p.id === poId);
+  if (!po) return;
+  const ing = ingOf(po.ingredient_id);
+  const v = prompt(`${ing?.name || ""}：実際の数量（${po.quantity_unit || "g"}）`, po.quantity);
+  if (v === null || v === "" || Number(v) <= 0) return;
+  apiFetch(`/rest/v1/purchase_orders?id=eq.${poId}`, { method: "PATCH", body: JSON.stringify({ quantity: Number(v) }) })
+    .then(() => load())
+    .catch((e) => { toast("修正に失敗しました"); console.error(e); });
+}
+
+/* ---------- 発注の記録（アラート行・検索行から1タップ起点） ---------- */
+
+let orderIng = null;
+
+function openOrder(id) {
+  orderIng = ingOf(id);
+  if (!orderIng) return;
+  const useUnit = orderIng.order_unit && orderIng.order_unit_to_g > 0;
+  $("order-title").textContent = `${orderIng.name}：発注した数量は？`;
+  $("order-unit").textContent = useUnit ? orderIng.order_unit : "g";
+  const last = lastOrder[orderIng.ingredient_id];
+  const lastArr = lastArrival[orderIng.ingredient_id]?.g;
+  let def = "";
+  if (last && (last.unit || "g") === (useUnit ? orderIng.order_unit : "g")) def = Number(last.qty);
+  else if (lastArr != null) def = useUnit ? Math.round((lastArr / orderIng.order_unit_to_g) * 10) / 10 : Math.round(lastArr);
+  $("order-qty").value = def;
+  $("order-hint").textContent = def !== ""
+    ? "前回と同じ量を入れてあります（違えば直してください）"
+    : (useUnit ? `1${orderIng.order_unit} = ${orderIng.order_unit_to_g}g` : "グラムで入力してください");
+  show("sheet-order-qty");
+  $("order-qty").focus();
+}
+
+async function saveOrder() {
+  const v = Number($("order-qty").value);
+  if (!v || v <= 0) { toast("数量を入れてください"); return; }
+  const useUnit = orderIng.order_unit && orderIng.order_unit_to_g > 0;
+  try {
+    const rows = await insert("purchase_orders", [{
+      tenant_id: myTenantId, ingredient_id: orderIng.ingredient_id,
+      quantity: v, quantity_unit: useUnit ? orderIng.order_unit : "g",
+      ordered_on: todayStr(), status: "発注済",
+    }]);
+    const poId = rows[0].id;
+    closeSheets();
+    toast(`${orderIng.name} ${v}${useUnit ? orderIng.order_unit : "g"} 発注を記録しました`, async () => {
+      await apiFetch(`/rest/v1/purchase_orders?id=eq.${poId}`, { method: "DELETE" });
+      load().catch(() => {});
+    });
+    load().catch(() => {});
+  } catch (e) { toast("記録に失敗しました"); console.error(e); }
 }
 
 /* ---------- 表示ユーティリティ：gを発注単位に換算して読みやすく ---------- */
@@ -126,7 +263,7 @@ function renderAlerts() {
         <div class="alert-name">${esc(a.name)}</div>
         <div class="alert-sub">予測 ${fmtAmount(ing, a.projected_g)}・${when}${orderBy}</div>
       </div>
-      <button class="btn-arrive" onclick="pickIngredient('${a.ingredient_id}')">入荷した</button>
+      <button class="btn-arrive" onclick="openOrder('${a.ingredient_id}')">発注した</button>
     </div>`;
   }).join("");
 }
@@ -139,9 +276,14 @@ async function renderSearch() {
   if (!q) { el.innerHTML = ""; return; }
   const hits = stock.filter((s) => s.name.includes(q)).slice(0, 10);
   if (!hits.length) { el.innerHTML = '<div class="empty" style="padding:16px;">見つかりません</div>'; return; }
-  el.innerHTML = hits.map((s) => `<div class="stock-row" onclick="showDetail('${s.ingredient_id}', this)">
-      <div class="alert-name">${esc(s.name)}</div>
-      <div class="alert-sub">現在庫 ${fmtAmount(s, s.current_g)} → 予測 ${fmtAmount(s, s.projected_g)}</div>
+  el.innerHTML = hits.map((s) => `<div class="stock-row">
+      <div class="stock-row-top" onclick="showDetail('${s.ingredient_id}', this)">
+        <div style="flex:1; min-width:0;">
+          <div class="alert-name">${esc(s.name)}</div>
+          <div class="alert-sub">現在庫 ${fmtAmount(s, s.current_g)} → 予測 ${fmtAmount(s, s.projected_g)}</div>
+        </div>
+        ${s.kind === "購入材料" ? `<button class="btn-arrive" onclick="event.stopPropagation();openOrder('${s.ingredient_id}')">発注した</button>` : ""}
+      </div>
       <div class="stock-detail" id="detail-${s.ingredient_id}"></div>
     </div>`).join("");
 }
@@ -264,7 +406,7 @@ function backToPick() {
 function show(id) { $("sheetbg").style.display = "block"; $(id).style.display = "block"; }
 function hide(id) { $(id).style.display = "none"; }
 function closeSheets() {
-  for (const id of ["sheet-arrival-pick", "sheet-arrival-qty"]) hide(id);
+  for (const id of ["sheet-arrival-pick", "sheet-arrival-qty", "sheet-order-qty"]) hide(id);
   $("sheetbg").style.display = "none";
 }
 

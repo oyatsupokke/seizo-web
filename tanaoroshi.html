@@ -35,6 +35,12 @@
   <h2 id="loc-title">保管場所は？</h2>
   <div class="grid" id="loc-grid"></div>
 </div>
+<div class="sheet" id="sheet-stale-po">
+  <h2>確定の前に：届いたか不明の発注が残っています</h2>
+  <div class="hint">「届いていた」＝記録だけ締めます（在庫は今回の実測で合うので動かしません）</div>
+  <div id="stale-po-list"></div>
+  <div class="row"><button class="btn-primary" onclick="proceedConfirm()">確定に進む</button></div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script src="api.js"></script>
@@ -307,7 +313,40 @@ async function reopenLoc(loc) {
 
 /* ---------- 確定（まりほ） ---------- */
 
+// 確定前の回収網：5日以上前の「発注済」が残っていたら届いた/来なかったを選ばせる
+// （放置された発注済は予測在庫を水増しして不足アラートを黙らせるため、月1のここで必ず拾う）
+let stalePOs = [];
+
 async function confirmStocktake() {
+  const since = new Date(Date.now() - 5 * 86400000).toISOString().slice(0, 10);
+  stalePOs = await rest(`purchase_orders?status=eq.発注済&ordered_on=lte.${since}&select=*&order=ordered_on`).catch(() => []);
+  if (stalePOs.length) { renderStalePOs(); show("sheet-stale-po"); return; }
+  proceedConfirm();
+}
+
+function renderStalePOs() {
+  $("stale-po-list").innerHTML = stalePOs.map((po) => {
+    const ing = ingredients.find((i) => i.id === po.ingredient_id);
+    return `<div class="tana-row" id="stale-${po.id}">
+      <div class="tana-main"><span class="tana-name">${esc(ing?.name || "？")} ${Number(po.quantity)}${esc(po.quantity_unit || "g")}</span>
+      <span class="tana-val">${po.ordered_on ? mmdd(po.ordered_on) + "発注" : ""}</span></div>
+      <button class="btn-loc" onclick="resolveStalePO('${po.id}','入荷済')">届いていた</button>
+      <button class="btn-revert" onclick="resolveStalePO('${po.id}','取消')">来なかった</button>
+    </div>`;
+  }).join("");
+}
+
+async function resolveStalePO(poId, status) {
+  try {
+    await apiFetch(`/rest/v1/purchase_orders?id=eq.${poId}`, { method: "PATCH", body: JSON.stringify({ status }) });
+    stalePOs = stalePOs.filter((p) => p.id !== poId);
+    if (stalePOs.length) renderStalePOs();
+    else { closeSheets(); proceedConfirm(); }
+  } catch (e) { toast("保存に失敗しました"); console.error(e); }
+}
+
+async function proceedConfirm() {
+  closeSheets();
   const n = Object.keys(items).length;
   if (!confirm(`棚卸を確定します（実測 ${n}件・未入力は理論在庫どおり）。\n実測と理論の差が「棚卸補正」として在庫に反映されます。よろしいですか？`)) return;
   try {
@@ -321,7 +360,7 @@ async function confirmStocktake() {
 function show(id) { $("sheetbg").style.display = "block"; $(id).style.display = "block"; }
 function hide(id) { $(id).style.display = "none"; }
 function closeSheets() {
-  for (const id of ["sheet-measure", "sheet-location"]) hide(id);
+  for (const id of ["sheet-measure", "sheet-location", "sheet-stale-po"]) hide(id);
   $("sheetbg").style.display = "none";
 }
 
