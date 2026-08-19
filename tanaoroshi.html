@@ -31,10 +31,6 @@
     <button class="btn-revert" id="unit-toggle" onclick="toggleUnit()" style="display:none;">gで入力する</button>
   </div>
 </div>
-<div class="sheet" id="sheet-location">
-  <h2 id="loc-title">保管場所は？</h2>
-  <div class="grid" id="loc-grid"></div>
-</div>
 <div class="sheet" id="sheet-stale-po">
   <h2>確定の前に：届いたか不明の発注が残っています</h2>
   <div class="hint">「届いていた」＝記録だけ締めます（在庫は今回の実測で合うので動かしません）</div>
@@ -45,14 +41,25 @@
 
 <script src="api.js"></script>
 <script>
-const LOCATIONS = ["冷蔵庫", "冷凍庫", "乾物棚", "常温棚"];
-const NOLOC = "場所未設定";
+/* セクション＝材料カテゴリを「数えて歩く順」のグループにまとめる
+   （狭い厨房＝保管場所は使わない。同じ材料が厨房＋予備に分かれるため場所軸は成立しない・2026-08-19まりほ）
+   並び順はまりほの歩く順に合わせて調整する（配列の順を変えるだけ） */
+const SECTIONS = [
+  { name: "粉類",           cats: ["小麦粉", "粉類"] },
+  { name: "砂糖・甘味",     cats: ["砂糖", "甘味料"] },
+  { name: "乳製品・卵・冷蔵", cats: ["乳製品", "牛乳", "チーズ", "生クリーム", "卵"] },
+  { name: "ナッツ・チョコ", cats: ["ナッツ類", "チョコレート"] },
+  { name: "フルーツ・ピューレ", cats: ["果物・野菜", "ピューレ", "ドライフルーツ"] },
+  { name: "製菓材料・その他", cats: [] },   // どのセクションにも入らない購入材料の受け皿
+  { name: "半製品",         cats: [] },     // kind=半製品はカテゴリに関係なくここ
+];
+const FALLBACK = "製菓材料・その他";
+
 let st = null;            // 入力中の棚卸 { id, taken_on, snapshot }
 let ingredients = [];     // 有効材料すべて
 let items = {};           // ingredient_id -> stocktake_item
-let closed = [];          // 締めた場所
-let target = null, useGram = false, locTarget = null;
-let bulkLoc = null;   // まとめて場所付けモード：選択中の場所（場所→材料タップの向きに反転）
+let closed = [];          // 締めたセクション
+let target = null, useGram = false;
 
 function toast(msg) {
   const t = $("toast");
@@ -61,10 +68,17 @@ function toast(msg) {
   setTimeout(() => t.classList.remove("show"), 2500);
 }
 
+function sectionOf(ing) {
+  if (ing.kind === "半製品") return "半製品";
+  const cat = (ing.category || "").trim();
+  for (const s of SECTIONS) if (s.cats.includes(cat)) return s.name;
+  return FALLBACK;
+}
+
 async function load() {
   const [sts, ings] = await Promise.all([
     rest("stocktakes?status=eq.入力中&select=id,taken_on,snapshot&limit=1"),
-    rest("ingredients?is_active=eq.true&select=id,name,kind,order_unit,order_unit_to_g,storage_location&order=name"),
+    rest("ingredients?is_active=eq.true&select=id,name,kind,category,order_unit,order_unit_to_g&order=name"),
   ]);
   ingredients = ings;
   st = sts[0] || null;
@@ -105,55 +119,44 @@ function render() {
       棚卸はまだ始まっていません。<br><br>
       始めると、その時点の理論在庫が記録されます。<br>
       数えるのは<b>理論在庫と違う物だけ</b>でOK。<br>
-      場所ごとに分担して、別の日に続きをやっても大丈夫です。<br><br>
+      グループごとに分担して、別の日に続きをやっても大丈夫です。<br><br>
       <button class="btn-primary" style="max-width:320px;" onclick="startStocktake()">📋 棚卸をはじめる</button>
     </div>`;
     return;
   }
 
-  // 保管場所ごとにセクション化（未設定は先頭＝現物を見ながらその場で場所を決める）
+  // カテゴリのセクションごとに表示（歩く順＝SECTIONSの並び）
   const groups = {};
   for (const ing of ingredients) {
-    const loc = ing.storage_location || NOLOC;
-    (groups[loc] = groups[loc] || []).push(ing);
+    const sec = sectionOf(ing);
+    (groups[sec] = groups[sec] || []).push(ing);
   }
-  const locs = Object.keys(groups).sort((a, b) => (a === NOLOC ? -1 : b === NOLOC ? 1 : a.localeCompare(b, "ja")));
+  const secs = SECTIONS.map((s) => s.name).filter((n) => groups[n]);
 
-  // 場所未設定は締められない＝全材料に場所が付くまで確定できない（未設定のまま初回が終わる事故防止）
-  const allClosed = !groups[NOLOC] && locs.every((l) => closed.includes(l));
+  const allClosed = secs.every((n) => closed.includes(n));
   const doneCount = Object.keys(items).length;
 
   let html = `<div class="stocktake-head">
     <div>${mmdd(st.taken_on)} 開始の棚卸（入力中）</div>
-    <div class="alert-sub">実測を入れたのは ${doneCount}件。入れなかった材料は「理論在庫どおり」として扱われます</div>
+    <div class="alert-sub">実測を入れたのは ${doneCount}件。入れなかった材料は「理論在庫どおり」として扱われます。厨房と予備置き場、両方あわせた量で数えてください</div>
   </div>`;
 
-  for (const loc of locs) {
-    const isClosed = closed.includes(loc);
-    const isNoloc = loc === NOLOC;
+  for (const sec of secs) {
+    const isClosed = closed.includes(sec);
     html += `<div class="loc-section${isClosed ? " closed" : ""}">
       <div class="loc-header">
-        <span class="loc-name">${esc(loc)}（${groups[loc].length}）</span>
-        ${isNoloc
-          ? (bulkLoc
-              ? `<button class="btn-close-loc" onclick="endBulk()">場所付けおわり</button>`
-              : `<button class="btn-loc" onclick="openBulkLocation()">まとめて場所付け</button>`)
-          : isClosed
-            ? `<span class="loc-done">✔ おわり <button class="btn-revert" onclick="reopenLoc('${esc(loc)}')">開け直す</button></span>`
-            : `<button class="btn-close-loc" onclick="closeLoc('${esc(loc)}')">この場所おわり</button>`}
-      </div>
-      ${isNoloc ? `<div class="hint" style="margin:6px 0;">${bulkLoc
-        ? `<b>「${esc(bulkLoc)}」に保管している材料を順にタップしてください</b>（場所が付いてその棚に移動します）`
-        : "場所が付くまで確定できません。「まとめて場所付け」で場所を選んでから材料を連打すると早いです"}</div>` : ""}`;
-    for (const ing of groups[loc]) {
+        <span class="loc-name">${esc(sec)}（${groups[sec].length}）</span>
+        ${isClosed
+          ? `<span class="loc-done">✔ おわり <button class="btn-revert" onclick="reopenLoc('${esc(sec)}')">開け直す</button></span>`
+          : `<button class="btn-close-loc" onclick="closeLoc('${esc(sec)}')">このグループおわり</button>`}
+      </div>`;
+    for (const ing of groups[sec]) {
       const it = items[ing.id];
-      const mainClick = isNoloc && bulkLoc ? `assignBulk('${ing.id}')` : `openMeasure('${ing.id}')`;
       html += `<div class="tana-row${it ? " measured" : ""}">
-        <div class="tana-main" onclick="${mainClick}">
+        <div class="tana-main" onclick="openMeasure('${ing.id}')">
           <span class="tana-name">${esc(ing.name)}</span>
           <span class="tana-val">${it ? `実測 ${fmtMeasured(it)}` : `理論 ${fmtTheory(ing)}`}</span>
         </div>
-        ${isNoloc && !bulkLoc ? `<button class="btn-loc" onclick="openLocation('${ing.id}')">場所</button>` : ""}
       </div>`;
     }
     html += `</div>`;
@@ -162,7 +165,7 @@ function render() {
   html += `<div class="confirm-area">
     ${allClosed
       ? `<button class="btn-primary" onclick="confirmStocktake()">✅ 棚卸を確定する（まりほ）</button>`
-      : `<button class="btn-primary" disabled>確定（すべての場所を「おわり」にすると押せます）</button>`}
+      : `<button class="btn-primary" disabled>確定（すべてのグループを「おわり」にすると押せます）</button>`}
   </div>`;
   el.innerHTML = html;
 }
@@ -199,9 +202,10 @@ function applyUnitLabel() {
   $("measure-unit").textContent = hasUnit ? target.order_unit : "g";
   $("measure-qty").step = hasUnit ? 0.5 : 1;
   $("unit-toggle").textContent = useGram ? `${target.order_unit}で入力する` : "gで入力する";
-  $("measure-hint").textContent = hasUnit
+  // 「厨房＋予備あわせて」は入力の瞬間に読まれる場所へ常設（genba指定）
+  $("measure-hint").textContent = (hasUnit
     ? `0.5${target.order_unit}きざみでOK（1${target.order_unit} = ${target.order_unit_to_g}g）`
-    : "グラムで入力してください";
+    : "グラムで入力してください") + "。厨房と予備、あわせた量で";
 }
 
 function toggleUnit() { useGram = !useGram; $("measure-qty").value = ""; applyUnitLabel(); }
@@ -223,75 +227,10 @@ async function saveMeasure() {
   } catch (e) { toast("記録に失敗しました"); console.error(e); }
 }
 
-/* ---------- 保管場所のインライン設定（初回に現物を見ながら） ---------- */
-
-function openLocation(id) {
-  locTarget = ingredients.find((i) => i.id === id);
-  $("loc-title").textContent = `${locTarget.name} の保管場所は？`;
-  renderLocGrid();
-  show("sheet-location");
-}
-
-function renderLocGrid() {
-  const known = [...new Set([...LOCATIONS, ...ingredients.map((i) => i.storage_location).filter(Boolean)])];
-  $("loc-grid").innerHTML =
-    known.map((l) => `<button onclick="setLocation('${esc(l)}')">${esc(l)}</button>`).join("") +
-    `<button class="other" onclick="setLocationOther()">その他（自由入力）</button>`;
-}
-
-async function setLocation(loc) {
-  closeSheets();
-  if (!locTarget) { // まとめて場所付けモードの場所選択
-    bulkLoc = loc;
-    render();
-    return;
-  }
-  try {
-    await apiFetch(`/rest/v1/ingredients?id=eq.${locTarget.id}`, {
-      method: "PATCH", body: JSON.stringify({ storage_location: loc }),
-    });
-    locTarget.storage_location = loc;
-    render();
-  } catch (e) { toast("保存に失敗しました"); console.error(e); }
-}
-
-/* まとめて場所付け：先に場所を選び、材料を連打で割り当てる（初回173件対策） */
-function openBulkLocation() {
-  locTarget = null;
-  $("loc-title").textContent = "どの場所の材料をまとめて付ける？";
-  renderLocGrid();
-  show("sheet-location");
-}
-
-async function assignBulk(id) {
-  const ing = ingredients.find((i) => i.id === id);
-  if (!ing || !bulkLoc) return;
-  ing.storage_location = bulkLoc; // 先に画面を進める（連打対応）
-  render();
-  try {
-    await apiFetch(`/rest/v1/ingredients?id=eq.${id}`, {
-      method: "PATCH", body: JSON.stringify({ storage_location: bulkLoc }),
-    });
-  } catch (e) {
-    ing.storage_location = null;
-    render();
-    toast("保存に失敗しました");
-    console.error(e);
-  }
-}
-
-function endBulk() { bulkLoc = null; render(); }
-
-function setLocationOther() {
-  const v = prompt("保管場所の名前");
-  if (v) setLocation(v.trim());
-  else closeSheets();
-}
-
-/* ---------- 「この場所おわり」（全場所が締まるまで確定不可） ---------- */
+/* ---------- 「このグループおわり」（全グループが締まるまで確定不可） ---------- */
 
 async function saveClosed() {
-  // snapshotに_closed_locationsを持たせる（理論在庫のキーはuuidなので衝突しない）
+  // snapshotに締め状態を持たせる（理論在庫のキーはuuidなので衝突しない）
   const snapshot = { ...(st.snapshot || {}), _closed_locations: closed };
   await apiFetch(`/rest/v1/stocktakes?id=eq.${st.id}`, {
     method: "PATCH", body: JSON.stringify({ snapshot }),
@@ -299,14 +238,14 @@ async function saveClosed() {
   st.snapshot = snapshot;
 }
 
-async function closeLoc(loc) {
-  if (!closed.includes(loc)) closed.push(loc);
+async function closeLoc(sec) {
+  if (!closed.includes(sec)) closed.push(sec);
   render();
   try { await saveClosed(); } catch (e) { toast("保存に失敗しました"); console.error(e); }
 }
 
-async function reopenLoc(loc) {
-  closed = closed.filter((l) => l !== loc);
+async function reopenLoc(sec) {
+  closed = closed.filter((l) => l !== sec);
   render();
   try { await saveClosed(); } catch (e) { toast("保存に失敗しました"); console.error(e); }
 }
@@ -360,7 +299,7 @@ async function proceedConfirm() {
 function show(id) { $("sheetbg").style.display = "block"; $(id).style.display = "block"; }
 function hide(id) { $(id).style.display = "none"; }
 function closeSheets() {
-  for (const id of ["sheet-measure", "sheet-location", "sheet-stale-po"]) hide(id);
+  for (const id of ["sheet-measure", "sheet-stale-po"]) hide(id);
   $("sheetbg").style.display = "none";
 }
 
