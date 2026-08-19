@@ -22,7 +22,8 @@
 <div class="sheet" id="sheet-product">
   <h2>何を仕込む？</h2>
   <input type="text" id="product-search" placeholder="名前で検索（半製品も出ます）" oninput="renderProductGrid()">
-  <div class="grid" id="product-grid" style="margin-top:10px;"></div>
+  <div class="cat-chips" id="product-cats" style="margin-top:8px;"></div>
+  <div class="grid" id="product-grid" style="margin-top:8px;"></div>
 </div>
 <div class="sheet" id="sheet-batch">
   <h2 id="batch-title">バッチ数は？</h2>
@@ -75,11 +76,13 @@ async function loadProducts() {
   if (products.length) return;
   // 半製品（カスタード等）も選べるようにする＝半製品仕込みの製造入庫を自由入力で取りこぼさない
   const [p, h] = await Promise.all([
-    rest("products?select=id,name,yield_per_batch&is_active=eq.true&order=name&limit=60"),
+    rest("products?select=id,name,category,yield_per_batch&is_active=eq.true&order=name&limit=300"),
     rest("ingredients?kind=eq.半製品&is_active=eq.true&select=id,name&order=name"),
   ]);
   products = [...p, ...h.map((x) => ({ ...x, isIng: true }))];
 }
+let prodCat = null;
+function prodCatOf(p) { return p.isIng ? "半製品" : (p.category || "その他"); }
 
 function render() {
   $("today").textContent = jpDate(new Date());
@@ -209,12 +212,20 @@ function setMember(mid) {
 async function openProductSheet() {
   await loadProducts();
   $("product-search").value = "";
+  prodCat = null;
   renderProductGrid();
   show("sheet-product");
 }
+function setProdCat(c) { prodCat = c; renderProductGrid(); }
 function renderProductGrid() {
+  const cats = [...new Set(products.map(prodCatOf))]
+    .sort((a, b) => (a === "半製品") - (b === "半製品") || a.localeCompare(b, "ja"));
+  $("product-cats").innerHTML =
+    `<button class="${prodCat === null ? "selected" : ""}" onclick="setProdCat(null)">すべて</button>` +
+    cats.map((c) => `<button class="${prodCat === c ? "selected" : ""}" onclick="setProdCat('${esc(c)}')">${esc(c)}</button>`).join("");
   const q = $("product-search").value.trim();
-  const hits = q ? products.filter((p) => p.name.includes(q)) : products;
+  let hits = prodCat ? products.filter((p) => prodCatOf(p) === prodCat) : products;
+  if (q) hits = hits.filter((p) => p.name.includes(q));
   $("product-grid").innerHTML =
     hits.slice(0, 40).map((p) => `<button onclick="pickProduct('${p.id}')">${esc(p.name)}${p.isIng ? "〔半製品〕" : ""}</button>`).join("") +
     `<button class="other" onclick="pickOther()">その他（自由入力）</button>`;
