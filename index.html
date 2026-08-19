@@ -21,7 +21,8 @@
 <div class="sheet-bg" id="sheetbg" onclick="closeSheets()"></div>
 <div class="sheet" id="sheet-product">
   <h2>何を仕込む？</h2>
-  <div class="grid" id="product-grid"></div>
+  <input type="text" id="product-search" placeholder="名前で検索（半製品も出ます）" oninput="renderProductGrid()">
+  <div class="grid" id="product-grid" style="margin-top:10px;"></div>
 </div>
 <div class="sheet" id="sheet-batch">
   <h2 id="batch-title">バッチ数は？</h2>
@@ -72,7 +73,12 @@ function renderAlertBand(al) {
 
 async function loadProducts() {
   if (products.length) return;
-  products = await rest("products?select=id,name,yield_per_batch&is_active=eq.true&order=name&limit=60");
+  // 半製品（カスタード等）も選べるようにする＝半製品仕込みの製造入庫を自由入力で取りこぼさない
+  const [p, h] = await Promise.all([
+    rest("products?select=id,name,yield_per_batch&is_active=eq.true&order=name&limit=60"),
+    rest("ingredients?kind=eq.半製品&is_active=eq.true&select=id,name&order=name"),
+  ]);
+  products = [...p, ...h.map((x) => ({ ...x, isIng: true }))];
 }
 
 function render() {
@@ -202,10 +208,16 @@ function setMember(mid) {
 
 async function openProductSheet() {
   await loadProducts();
-  $("product-grid").innerHTML =
-    products.map((p) => `<button onclick="pickProduct('${p.id}')">${esc(p.name)}</button>`).join("") +
-    `<button class="other" onclick="pickOther()">その他（自由入力）</button>`;
+  $("product-search").value = "";
+  renderProductGrid();
   show("sheet-product");
+}
+function renderProductGrid() {
+  const q = $("product-search").value.trim();
+  const hits = q ? products.filter((p) => p.name.includes(q)) : products;
+  $("product-grid").innerHTML =
+    hits.slice(0, 40).map((p) => `<button onclick="pickProduct('${p.id}')">${esc(p.name)}${p.isIng ? "〔半製品〕" : ""}</button>`).join("") +
+    `<button class="other" onclick="pickOther()">その他（自由入力）</button>`;
 }
 function pickProduct(pid) {
   pendingProduct = products.find((p) => p.id === pid);
@@ -221,7 +233,16 @@ async function quickAdd(n) {
   }
   closeSheets();
   try {
-    await rpc("fn_quick_plan", { p_product_id: pendingProduct.id, p_batches: n });
+    if (pendingProduct.isIng) {
+      // 半製品はfn_quick_planが未対応なので直接insert（RLS越し・当日の予定として登録）
+      const tid = await rpc("fn_my_tenant_id");
+      await insert("production_plans", {
+        tenant_id: tid, plan_date: todayStr(), task_category: "仕込み",
+        ingredient_id: pendingProduct.id, batch_count: n, source: "app",
+      });
+    } else {
+      await rpc("fn_quick_plan", { p_product_id: pendingProduct.id, p_batches: n });
+    }
     await load();
   } catch (e) { toast("登録に失敗しました"); console.error(e); }
 }

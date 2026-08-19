@@ -93,6 +93,9 @@ label{font-size:.85rem; font-weight:700; display:block; margin:14px 0 6px;}
 .btn-loc{flex:0 0 auto; background:#eee9ff; color:#5b3fa8; font-size:.8rem; padding:8px 12px;}
 .confirm-area{margin:20px 0 40px;}
 .toast.clickable{pointer-events:auto;}
+.bind-state{font-size:.8rem; margin:6px 2px 0; min-height:1em;}
+.bind-state.ok{color:#2e7d32; font-weight:700;}
+.bind-state.warn{color:#b26a00; font-weight:700;}
 .toast-undo{background:#fff; color:#333; font-size:.8rem; font-weight:700; padding:4px 12px; border-radius:8px; flex:0 0 auto; margin-left:8px;}
 .stock-row-top{display:flex; align-items:center; gap:8px;}
 .po-row .btn-revert{padding:6px 4px;}

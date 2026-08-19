@@ -14,6 +14,8 @@
   .wk-nav{display:flex; gap:8px; align-items:center; margin:10px 0;}
   .wk-nav button{flex:0 0 auto; padding:8px 16px; font-size:.9rem; background:#efeaf9; color:var(--c-shikomi);}
   .wk-nav .label{flex:1; text-align:center; font-weight:700; font-size:.9rem;}
+  .free-mark{background:#fdf3e0; color:#b26a00; font-size:.7rem; border-radius:6px; padding:1px 6px; font-weight:700;}
+  .grid button.hot{border:2px solid #2e7d32; background:#eef7ee;}
 </style>
 </head>
 <body>
@@ -29,6 +31,7 @@
     <div class="seg" id="f-kubun"></div>
     <label>商品</label>
     <input type="text" id="f-search" placeholder="商品名で検索（マスタ外は自由入力してそのまま登録）" autocomplete="off">
+    <div class="bind-state" id="f-bind"></div>
     <div class="grid" id="f-products" style="margin-top:8px"></div>
     <div class="detail" id="f-yield" style="margin:6px 2px"></div>
     <label>バッチ数</label>
@@ -52,7 +55,22 @@
 <script src="api.js"></script>
 <script>
 const KUBUNS = ["仕込み", "オーダーケーキ", "プチギフト", "発送"];
-let products = [], selProduct = null, selKubun = "仕込み", weekStart = null;
+let products = [], hanseihin = [], selProduct = null, selKubun = "仕込み", weekStart = null;
+
+// 区分=仕込みのときだけ半製品も候補に出す（半製品の仕込み＝製造入庫の起点なので紐づけ必須）
+function candidates() {
+  return selKubun === "仕込み" ? [...products, ...hanseihin] : products;
+}
+
+// 表記ゆれを吸収して比較（全角/半角・ひらがな→カタカナ・空白除去。genba指定：厳密一致だと安全網が発動しない）
+function norm(s) {
+  return (s || "").normalize("NFKC").replace(/[\s　]/g, "")
+    .replace(/[ぁ-ゖ]/g, (c) => String.fromCharCode(c.charCodeAt(0) + 0x60));
+}
+function exactMatch(text) {
+  const n = norm(text);
+  return n ? candidates().find((p) => norm(p.name) === n) || null : null;
+}
 
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),2500); }
 
@@ -60,28 +78,53 @@ function renderKubun() {
   $("f-kubun").innerHTML = KUBUNS.map((k) =>
     `<button type="button" class="${k === selKubun ? "selected" : ""}" onclick="setKubun('${k}')">${k}</button>`).join("");
 }
-function setKubun(k) { selKubun = k; renderKubun(); }
+function setKubun(k) { selKubun = k; renderKubun(); if (selProduct?.isIng && k !== "仕込み") { selProduct = null; } renderProducts(); renderBind(); }
 
 function renderProducts() {
   const q = $("f-search").value.trim();
-  const hits = q ? products.filter((p) => p.name.includes(q)) : products.slice(0, 8);
+  const list = candidates();
+  const hits = q ? list.filter((p) => p.name.includes(q) || norm(p.name).includes(norm(q))) : list.slice(0, 8);
+  // 候補が1件に絞れたら大きく目立たせる（自動紐づけはしない＝誤紐づけ防止・genba指定）
+  const hot = q && hits.length === 1 ? "hot" : "";
   $("f-products").innerHTML = hits.slice(0, 8).map((p) =>
-    `<button type="button" class="${selProduct?.id === p.id ? "selected" : ""}" onclick="pick('${p.id}')">${esc(p.name)}</button>`).join("");
+    `<button type="button" class="${selProduct?.id === p.id ? "selected" : ""} ${hot}" onclick="pick('${p.id}')">${esc(p.name)}${p.isIng ? "〔半製品〕" : ""}</button>`).join("");
 }
 function pick(pid) {
-  selProduct = products.find((p) => p.id === pid);
+  selProduct = candidates().find((p) => p.id === pid);
   $("f-search").value = selProduct.name;
   $("f-yield").textContent = selProduct.yield_per_batch ? `1バッチ = ${Number(selProduct.yield_per_batch)}個` : "";
   renderProducts();
+  renderBind();
 }
 
-$("f-search").addEventListener("input", () => { selProduct = null; $("f-yield").textContent = ""; renderProducts(); });
+// 紐づき状態を常時表示（紐づかない登録＝在庫連動なしを黙って通さない）
+function renderBind() {
+  const el = $("f-bind");
+  const text = $("f-search").value.trim();
+  if (selProduct) {
+    el.className = "bind-state ok";
+    el.textContent = `✔ ${selProduct.name}${selProduct.isIng ? "〔半製品〕" : ""} に紐づきました（レシピ・在庫連動あり）`;
+  } else if (text) {
+    const exact = exactMatch(text);
+    el.className = "bind-state warn";
+    el.textContent = exact
+      ? `登録時に「${exact.name}」へ自動で紐づきます（名前が一致）`
+      : "⚠ このままだと自由入力（レシピ・在庫連動なし）。下の候補をタップすると紐づきます";
+  } else {
+    el.className = "bind-state";
+    el.textContent = "";
+  }
+}
+
+$("f-search").addEventListener("input", () => { selProduct = null; $("f-yield").textContent = ""; renderProducts(); renderBind(); });
 
 $("form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const date = $("f-date").value;
   const text = $("f-search").value.trim();
   if (!date || (!selProduct && !text)) { toast("日付と商品（または自由入力）を入れてください"); return; }
+  // タップし忘れ救済：名前が一致（表記ゆれ吸収）ならマスタに自動で紐づける
+  if (!selProduct && text) selProduct = exactMatch(text);
   const row = {
     plan_date: date,
     task_category: selKubun,
@@ -90,13 +133,16 @@ $("form").addEventListener("submit", async (e) => {
     source: "app",
     tenant_id: await myTenantId(),
   };
-  if (selProduct) row.product_id = selProduct.id; else row.title = text;
+  if (selProduct) { if (selProduct.isIng) row.ingredient_id = selProduct.id; else row.product_id = selProduct.id; }
+  else row.title = text;
   try {
     await insert("production_plans", row);
-    $("f-msg").textContent = `登録しました：${mmdd(date)} ${selKubun}「${selProduct ? selProduct.name : text}」`;
+    $("f-msg").textContent = selProduct
+      ? `登録しました：${mmdd(date)} ${selKubun}「${selProduct.name}」（マスタ紐づけ✔）`
+      : `登録しました：${mmdd(date)} ${selKubun}「${text}」（自由入力・在庫連動なし）`;
     // 連続登録モード：日付・区分は保持、商品・メモだけクリア
     selProduct = null; $("f-search").value = ""; $("f-memo").value = ""; $("f-yield").textContent = "";
-    renderProducts(); loadWeek();
+    renderProducts(); renderBind(); loadWeek();
   } catch (err) { toast("登録に失敗しました"); console.error(err); }
 });
 
@@ -134,10 +180,13 @@ async function loadWeek() {
       const cls = KUBUN_CLASS[r.task_category] || "sonota";
       const st = r.status === "完了" ? "st-done" : "";
       const batch = !r.title && r.batch_count ? ` ×${Number(r.batch_count)}` : "";
+      // 仕込みなのに紐づいていない行＝在庫連動なし。翌朝の一覧で気づけるようにマークする
+      const freeMark = r.task_category === "仕込み" && !r.product_id && !r.ingredient_id
+        ? ' <span class="free-mark">自由</span>' : "";
       const canDel = r.status === "予定" && r.source === "app";
       html += `<div class="mini-card ${st}" style="border-left-color:var(--c-${cls})">
         <span><span class="kubun" style="background:var(--c-${cls})">${esc(r.task_category)}</span>
-        ${esc(name)}${batch}${r.status !== "予定" ? `・${r.status}` : ""}</span>
+        ${esc(name)}${batch}${freeMark}${r.status !== "予定" ? `・${r.status}` : ""}</span>
         ${canDel ? `<span class="del" onclick="delPlan('${r.id}')">削除</span>` : ""}</div>`;
     }
     if (!(byDay[key] || []).length) html += `<div class="detail" style="margin:2px 6px">—</div>`;
@@ -159,8 +208,14 @@ if (requireLogin()) {
   $("f-date").value = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return iso(d); })(); // デフォルト明日
   weekStart = startOfWeek(new Date());
   renderKubun();
-  rest("products?select=id,name,yield_per_batch&is_active=eq.true&order=name&limit=200")
-    .then((p) => { products = p; renderProducts(); });
+  Promise.all([
+    rest("products?select=id,name,yield_per_batch&is_active=eq.true&order=name&limit=300"),
+    rest("ingredients?kind=eq.半製品&is_active=eq.true&select=id,name&order=name"),
+  ]).then(([p, h]) => {
+    products = p;
+    hanseihin = h.map((x) => ({ ...x, isIng: true }));
+    renderProducts();
+  });
   loadWeek().catch((e) => toast("読み込みエラー"));
 }
 </script>
