@@ -115,7 +115,18 @@ function render() {
   if (!tasks.length) {
     list.innerHTML = '<div class="empty">今日のタスクはまだありません。<br>「＋臨時で仕込む」か「予定登録」から追加できます</div>';
   } else {
-    list.innerHTML = tasks.map(cardHtml).join("");
+    // 旧ボードの区分セクション移植（枠の中は持ち越し→時刻順のまま）
+    const SEC = [["仕込み", "🥣"], ["オーダーケーキ", "🎂"], ["プチギフト", "🎁"], ["発送", "📦"]];
+    const known = new Set(SEC.map(([k]) => k));
+    let html = "";
+    for (const [k, icon] of SEC) {
+      const rows = tasks.filter((t) => t.task_category === k);
+      if (!rows.length) continue;
+      html += `<div class="section-label" style="font-size:.95rem;">${icon} ${k}</div>` + rows.map(cardHtml).join("");
+    }
+    const rest2 = tasks.filter((t) => !known.has(t.task_category));
+    if (rest2.length) html += `<div class="section-label" style="font-size:.95rem;">その他</div>` + rest2.map(cardHtml).join("");
+    list.innerHTML = html;
   }
   const countable = tasks.filter((t) => t.task_category !== "オーダーケーキ");
   const done = countable.filter((t) => t.status === "完了").length;

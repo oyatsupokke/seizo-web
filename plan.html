@@ -63,6 +63,15 @@
     <p id="f-msg" style="font-size:.85rem; color:var(--c-gift); font-weight:700;"></p>
   </form>
 
+  <div class="section-label" style="font-size:1rem; margin-top:28px">📆 月カレンダー</div>
+  <div class="wk-nav">
+    <button onclick="moveMonth(-1)">← 前の月</button>
+    <div class="label" id="cal-label"></div>
+    <button onclick="moveMonth(1)">次の月 →</button>
+  </div>
+  <div class="cal-grid" id="cal-head"></div>
+  <div class="cal-grid" id="cal-body"></div>
+
   <div class="section-label" style="font-size:1rem; margin-top:28px">📅 週の予定</div>
   <div class="wk-nav">
     <button onclick="moveWeek(-1)">← 前の週</button>
@@ -275,7 +284,7 @@ $("form").addEventListener("submit", async (e) => {
     selProduct = null; freeText = null; selWork = null;
     $("f-search").value = ""; $("f-memo").value = ""; $("f-time").value = ""; $("f-yield").textContent = "";
     renderWork();
-    closePanel(); renderBind(); loadWeek();
+    closePanel(); renderBind(); loadWeek(); loadCal().catch(() => {});
   } catch (err) { toast("登録に失敗しました"); console.error(err); }
 });
 
@@ -283,6 +292,45 @@ let _tid = null;
 async function myTenantId() {
   if (!_tid) _tid = (await rpc("fn_my_tenant_id")) || null;
   return _tid;
+}
+
+/* ---------- 月カレンダー（旧ボードの月タブ移植：色ドット＋件数・日タップで予定追加へ） ---------- */
+
+let calMonth = null;   // その月の1日のDate
+
+async function loadCal() {
+  const y = calMonth.getFullYear(), m = calMonth.getMonth();
+  $("cal-label").textContent = `${y}年${m + 1}月`;
+  $("cal-head").innerHTML = ["月","火","水","木","金","土","日"].map((d) => `<div class="cal-dow">${d}</div>`).join("");
+  const first = new Date(y, m, 1), last = new Date(y, m + 1, 0);
+  const rows = await rest(`production_plans?select=plan_date,task_category&plan_date=gte.${iso(first)}&plan_date=lte.${iso(last)}`);
+  const byDay = {};
+  for (const r of rows) {
+    const d = (byDay[r.plan_date] ||= {});
+    d[r.task_category] = (d[r.task_category] || 0) + 1;
+  }
+  const lead = (first.getDay() + 6) % 7;    // 月曜始まり
+  let html = "";
+  for (let i = 0; i < lead; i++) html += `<div class="cal-cell empty"></div>`;
+  for (let day = 1; day <= last.getDate(); day++) {
+    const key = iso(new Date(y, m, day));
+    const cnts = byDay[key] || {};
+    const total = Object.values(cnts).reduce((a, b) => a + b, 0);
+    const dots = Object.keys(cnts)
+      .map((k) => `<span class="cal-dot" style="background:var(--c-${KUBUN_CLASS[k] || "sonota"})"></span>`).join("");
+    html += `<div class="cal-cell ${key === todayStr() ? "today" : ""}" onclick="pickDay('${key}')">
+      <div class="cal-num">${day}</div><div class="cal-dots">${dots}</div>${total ? `<div class="cal-cnt">${total}</div>` : ""}</div>`;
+  }
+  $("cal-body").innerHTML = html;
+}
+function moveMonth(n) { calMonth.setMonth(calMonth.getMonth() + n); loadCal().catch(() => {}); }
+function pickDay(key) {
+  // 旧ボードの「日タップで詳細＋その日へ予定追加」：フォームの日付を合わせ、週一覧をその週へ
+  $("f-date").value = key;
+  weekStart = startOfWeek(new Date(key + "T00:00:00"));
+  loadWeek().catch(() => {});
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  toast(`${mmdd(key)} を選びました（フォームの日付にセット済み）`);
 }
 
 /* ---------- 週一覧 ---------- */
@@ -360,7 +408,9 @@ if (requireLogin()) {
       }
     }
   });
+  calMonth = new Date(); calMonth.setDate(1);
   loadWeek().catch((e) => toast("読み込みエラー"));
+  loadCal().catch(() => {});
 }
 </script>
 </body>

@@ -117,3 +117,17 @@ label{font-size:.85rem; font-weight:700; display:block; margin:14px 0 6px;}
   margin: 8px 2px 0; padding: 6px 10px; border-radius: 8px;
   background: #f6f1e8; color: #6b5a44; font-size: 13px;
 }
+
+/* 月カレンダー（plan.html） */
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 3px; }
+.cal-dow { text-align: center; font-size: 11px; color: var(--muted); padding: 2px 0; font-weight: 700; }
+.cal-cell {
+  min-height: 52px; background: #fff; border: 1px solid #eee; border-radius: 8px;
+  padding: 3px 4px; position: relative; cursor: pointer;
+}
+.cal-cell.empty { background: transparent; border: none; cursor: default; }
+.cal-cell.today { border: 2px solid var(--c-gift); }
+.cal-num { font-size: 12px; font-weight: 700; }
+.cal-dots { display: flex; flex-wrap: wrap; gap: 2px; margin-top: 2px; }
+.cal-dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; }
+.cal-cnt { position: absolute; right: 4px; bottom: 2px; font-size: 10px; color: var(--muted); }
