@@ -22,9 +22,15 @@
 <div class="sheet" id="sheet-product">
   <h2>何を仕込む？</h2>
   <input type="text" id="product-search" placeholder="名前で検索（半製品も出ます）" oninput="renderProductGrid()">
-  <div class="picker-hint">生地を作る日は「<b>生地｜バターサブレ</b>」／その生地を焼く日は「<b>バターサブレ</b>」</div>
   <div class="cat-chips" id="product-cats" style="margin-top:8px;"></div>
   <div class="grid" id="product-grid" style="margin-top:8px;"></div>
+</div>
+<div class="sheet" id="sheet-work">
+  <h2 id="work-title">どっちの作業？</h2>
+  <div class="grid">
+    <button onclick="pickWork('dough')">🧊 生地を作る<br><small>冷凍ストックに追加</small></button>
+    <button onclick="pickWork('bake')">🔥 焼く<br><small>冷凍生地を使う</small></button>
+  </div>
 </div>
 <div class="sheet" id="sheet-batch">
   <h2 id="batch-title">バッチ数は？</h2>
@@ -73,23 +79,30 @@ function renderAlertBand(al) {
   el.innerHTML = `<a class="alert-band" href="zaiko.html">⚠ 材料不足：${esc(head)} — タップで確認</a>`;
 }
 
+let doughFor = {};   // product_id -> {id, name}（生地。商品→作業の2段選択用）
 async function loadProducts() {
   if (products.length) return;
   // 半製品（カスタード等）も選べるようにする＝半製品仕込みの製造入庫を自由入力で取りこぼさない
+  // 生地は一覧に出さない（商品を選んでから「生地を作る／焼く」を選ぶ方式・2026-08-20まりほ）
   const [p, h] = await Promise.all([
     rest("products?select=id,name,category,yield_per_batch&is_active=eq.true&order=name&limit=300"),
     rest("ingredients?kind=eq.半製品&is_active=eq.true&select=id,name,category&order=name"),
   ]);
-  products = [...p, ...h.map((x) => ({ ...x, isIng: true }))];
+  products = [...p, ...h.filter((x) => x.category !== "生地").map((x) => ({ ...x, isIng: true }))];
+  const doughs = h.filter((x) => x.category === "生地");
+  if (doughs.length && !Object.keys(doughFor).length) {
+    const ids = doughs.map((d) => d.id).join(",");
+    const rows = await rest(`recipe_items?ingredient_id=in.(${ids})&select=ingredient_id,recipes!inner(product_id,is_active)&recipes.is_active=is.true`);
+    const byId = Object.fromEntries(doughs.map((d) => [d.id, d]));
+    for (const r of rows) {
+      const pid = r.recipes && r.recipes.product_id;
+      if (pid) doughFor[pid] = byId[r.ingredient_id];
+    }
+  }
 }
 let prodCat = null;
-function prodCatOf(p) { return p.isIng ? (p.category === "生地" ? "生地" : "半製品") : (p.category || "その他"); }
-// 見分ける文字は名前の先頭に置く（末尾だと折り返しで読まれない・genba指摘）
-function itemLabel(p) {
-  if (!p.isIng) return esc(p.name);
-  if (p.category === "生地") return `<b>生地｜</b>${esc(p.name.replace(/生地$/, ""))}`;
-  return `${esc(p.name)}〔半製品〕`;
-}
+function prodCatOf(p) { return p.isIng ? "半製品" : (p.category || "その他"); }
+function itemLabel(p) { return p.isIng ? `${esc(p.name)}〔半製品〕` : esc(p.name); }
 
 function render() {
   $("today").textContent = jpDate(new Date());
@@ -226,7 +239,7 @@ async function openProductSheet() {
 function setProdCat(c) { prodCat = c; renderProductGrid(); }
 function renderProductGrid() {
   const cats = [...new Set(products.map(prodCatOf))]
-    .sort((a, b) => (a === "半製品") - (b === "半製品") || (a === "生地") - (b === "生地") || a.localeCompare(b, "ja"));
+    .sort((a, b) => (a === "半製品") - (b === "半製品") || a.localeCompare(b, "ja"));
   $("product-cats").innerHTML =
     `<button class="${prodCat === null ? "selected" : ""}" onclick="setProdCat(null)">すべて</button>` +
     cats.map((c) => `<button class="${prodCat === c ? "selected" : ""}" onclick="setProdCat('${esc(c)}')">${esc(c)}</button>`).join("");
@@ -237,10 +250,25 @@ function renderProductGrid() {
     hits.slice(0, 40).map((p) => `<button onclick="pickProduct('${p.id}')">${itemLabel(p)}</button>`).join("") +
     `<button class="other" onclick="pickOther()">その他（自由入力）</button>`;
 }
+let pendingWork = null;  // 'dough' | 'bake'
 function pickProduct(pid) {
   pendingProduct = products.find((p) => p.id === pid);
+  pendingWork = null;
+  if (!pendingProduct.isIng && doughFor[pendingProduct.id]) {
+    $("work-title").textContent = `${pendingProduct.name}：どっちの作業？`;
+    hide("sheet-product"); show("sheet-work");
+    return;
+  }
   $("batch-title").textContent = `${pendingProduct.name}：バッチ数は？`;
   hide("sheet-product"); show("sheet-batch");
+}
+function pickWork(w) {
+  pendingWork = w;
+  const d = doughFor[pendingProduct.id];
+  $("batch-title").textContent = w === "dough"
+    ? `${d.name}を作る：何バッチ？`
+    : `${pendingProduct.name}を焼く：何バッチ？`;
+  hide("sheet-work"); show("sheet-batch");
 }
 async function quickAdd(n) {
   if (batchEditTarget) { // 修正モード：引落も自動で再計算される（fn_set_batches）
@@ -251,12 +279,13 @@ async function quickAdd(n) {
   }
   closeSheets();
   try {
-    if (pendingProduct.isIng) {
-      // 半製品はfn_quick_planが未対応なので直接insert（RLS越し・当日の予定として登録）
+    const doughId = pendingWork === "dough" ? doughFor[pendingProduct.id].id : null;
+    if (pendingProduct.isIng || doughId) {
+      // 半製品・生地はfn_quick_planが未対応なので直接insert（RLS越し・当日の予定として登録）
       const tid = await rpc("fn_my_tenant_id");
       await insert("production_plans", {
         tenant_id: tid, plan_date: todayStr(), task_category: "仕込み",
-        ingredient_id: pendingProduct.id, batch_count: n, source: "app",
+        ingredient_id: doughId || pendingProduct.id, batch_count: n, source: "app",
       });
     } else {
       await rpc("fn_quick_plan", { p_product_id: pendingProduct.id, p_batches: n });
@@ -282,7 +311,7 @@ async function pickOther() {
 function show(id) { $("sheetbg").style.display = "block"; $(id).style.display = "block"; }
 function hide(id) { $(id).style.display = "none"; }
 function closeSheets() {
-  for (const id of ["sheet-product", "sheet-batch", "sheet-member"]) hide(id);
+  for (const id of ["sheet-product", "sheet-work", "sheet-batch", "sheet-member"]) hide(id);
   $("sheetbg").style.display = "none";
   batchEditTarget = null;
 }

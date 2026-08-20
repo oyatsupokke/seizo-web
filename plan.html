@@ -40,9 +40,15 @@
       <button type="button" class="combo-toggle" id="f-toggle">▾</button>
     </div>
     <div class="combo-panel" id="f-panel" style="display:none">
-      <div class="picker-hint">生地を作る日は「<b>生地｜バターサブレ</b>」／その生地を焼く日は「<b>バターサブレ</b>」</div>
       <div class="cat-chips" id="f-cats"></div>
       <div class="combo-list" id="f-list"></div>
+    </div>
+    <div id="f-work-wrap" style="display:none">
+      <label>作業</label>
+      <div class="seg" id="f-work">
+        <button type="button" onclick="setWork('dough')">🧊 生地を作る（冷凍ストック）</button>
+        <button type="button" onclick="setWork('bake')">🔥 焼く</button>
+      </div>
     </div>
     <div class="bind-state" id="f-bind"></div>
     <div class="detail" id="f-yield" style="margin:6px 2px"></div>
@@ -68,10 +74,14 @@
 <script>
 const KUBUNS = ["仕込み", "オーダーケーキ", "プチギフト", "発送"];
 let products = [], hanseihin = [], selProduct = null, selKubun = "仕込み", weekStart = null;
+let doughFor = {};        // product_id -> {id, name}（生地。商品→作業の2段選択用）
+let selWork = null;       // 'dough' | 'bake'（生地がある商品のみ）
 
 // 区分=仕込みのときだけ半製品も候補に出す（半製品の仕込み＝製造入庫の起点なので紐づけ必須）
 function candidates() {
-  return selKubun === "仕込み" ? [...products, ...hanseihin] : products;
+  // 生地は一覧に出さない（商品を選んでから「生地を作る／焼く」を選ぶ方式・2026-08-20まりほ）
+  const h = hanseihin.filter((x) => x.category !== "生地");
+  return selKubun === "仕込み" ? [...products, ...h] : products;
 }
 
 // 表記ゆれを吸収して比較（全角/半角・ひらがな→カタカナ・空白除去。genba指定：厳密一致だと安全網が発動しない）
@@ -140,11 +150,25 @@ function setCat(c) { selCat = c; renderPanel(); }
 function pick(pid) {
   selProduct = candidates().find((p) => p.id === pid);
   freeText = null;
+  selWork = null;
   $("f-search").value = selProduct.name;
   $("f-yield").textContent = selProduct.yield_per_batch ? `1バッチ = ${Number(selProduct.yield_per_batch)}個` : "";
   closePanel();
+  renderWork();
   renderBind();
 }
+
+/* 生地がある商品だけ「作業」を選ぶ（生地を作る／焼く） */
+function renderWork() {
+  const has = selProduct && !selProduct.isIng && doughFor[selProduct.id];
+  $("f-work-wrap").style.display = has ? "block" : "none";
+  if (has) {
+    const btns = $("f-work").querySelectorAll("button");
+    btns[0].classList.toggle("selected", selWork === "dough");
+    btns[1].classList.toggle("selected", selWork === "bake");
+  }
+}
+function setWork(w) { selWork = w; renderWork(); renderBind(); }
 function pickFree() {
   freeText = $("f-search").value.trim();
   selProduct = null;
@@ -157,8 +181,20 @@ function renderBind() {
   const el = $("f-bind");
   const text = $("f-search").value.trim();
   if (selProduct) {
-    el.className = "bind-state ok";
-    el.textContent = `✔ ${selProduct.name}${selProduct.isIng ? "〔半製品〕" : ""}（レシピ・在庫連動あり）`;
+    const dough = !selProduct.isIng && doughFor[selProduct.id];
+    if (dough && !selWork) {
+      el.className = "bind-state warn";
+      el.textContent = "作業を選んでください（生地を作る？ 焼く？）";
+    } else if (dough && selWork === "dough") {
+      el.className = "bind-state ok";
+      el.textContent = `✔ ${dough.name}を作って冷凍ストック（材料が減り、生地が増えます）`;
+    } else if (dough && selWork === "bake") {
+      el.className = "bind-state ok";
+      el.textContent = `✔ ${selProduct.name}を焼く（${dough.name}のストックが減ります）`;
+    } else {
+      el.className = "bind-state ok";
+      el.textContent = `✔ ${selProduct.name}${selProduct.isIng ? "〔半製品〕" : ""}（レシピ・在庫連動あり）`;
+    }
   } else if (freeText) {
     el.className = "bind-state warn";
     el.textContent = `マスタ外「${freeText}」で登録します（在庫連動なし）`;
@@ -198,7 +234,14 @@ $("form").addEventListener("submit", async (e) => {
     source: "app",
     tenant_id: await myTenantId(),
   };
-  if (selProduct) { if (selProduct.isIng) row.ingredient_id = selProduct.id; else row.product_id = selProduct.id; }
+  if (selProduct && !selProduct.isIng && doughFor[selProduct.id] && !selWork && selKubun === "仕込み") {
+    renderWork(); toast("作業を選んでください（生地を作る？ 焼く？）"); return;
+  }
+  if (selProduct) {
+    if (selProduct.isIng) row.ingredient_id = selProduct.id;
+    else if (selWork === "dough" && doughFor[selProduct.id]) row.ingredient_id = doughFor[selProduct.id].id;
+    else row.product_id = selProduct.id;
+  }
   else row.title = freeText;
   try {
     await insert("production_plans", row);
@@ -276,9 +319,19 @@ if (requireLogin()) {
   Promise.all([
     rest("products?select=id,name,category,yield_per_batch&is_active=eq.true&order=name&limit=300"),
     rest("ingredients?kind=eq.半製品&is_active=eq.true&select=id,name,category&order=name"),
-  ]).then(([p, h]) => {
+  ]).then(async ([p, h]) => {
     products = p;
     hanseihin = h.map((x) => ({ ...x, isIng: true }));
+    const doughs = h.filter((x) => x.category === "生地");
+    if (doughs.length) {
+      const ids = doughs.map((d) => d.id).join(",");
+      const rows = await rest(`recipe_items?ingredient_id=in.(${ids})&select=ingredient_id,recipes!inner(product_id,is_active)&recipes.is_active=is.true`);
+      const byId = Object.fromEntries(doughs.map((d) => [d.id, d]));
+      for (const r of rows) {
+        const pid = r.recipes && r.recipes.product_id;
+        if (pid) doughFor[pid] = byId[r.ingredient_id];
+      }
+    }
   });
   loadWeek().catch((e) => toast("読み込みエラー"));
 }
