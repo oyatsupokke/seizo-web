@@ -22,6 +22,7 @@
 <div class="sheet" id="sheet-product">
   <h2>何を仕込む？</h2>
   <input type="text" id="product-search" placeholder="名前で検索（半製品も出ます）" oninput="renderProductGrid()">
+  <div class="picker-hint">こねる＝<b>生地｜◯◯</b>　／　焼く＝<b>◯◯</b></div>
   <div class="cat-chips" id="product-cats" style="margin-top:8px;"></div>
   <div class="grid" id="product-grid" style="margin-top:8px;"></div>
 </div>
@@ -57,7 +58,7 @@ async function load() {
   const [t, m, al] = await Promise.all([
     rest("v_today_tasks?select=*"),
     rest("members?select=id,display_name&is_active=eq.true&order=sort_order"),
-    rest("v_order_alerts?alert_kind=eq.不足&select=name,runout_date&order=runout_date").catch(() => []),
+    rest("v_order_alerts?alert_kind=eq.不足&kind=eq.購入材料&select=name,runout_date&order=runout_date").catch(() => []),
   ]);
   tasks = t; members = m;
   renderAlertBand(al);
@@ -77,12 +78,18 @@ async function loadProducts() {
   // 半製品（カスタード等）も選べるようにする＝半製品仕込みの製造入庫を自由入力で取りこぼさない
   const [p, h] = await Promise.all([
     rest("products?select=id,name,category,yield_per_batch&is_active=eq.true&order=name&limit=300"),
-    rest("ingredients?kind=eq.半製品&is_active=eq.true&select=id,name&order=name"),
+    rest("ingredients?kind=eq.半製品&is_active=eq.true&select=id,name,category&order=name"),
   ]);
   products = [...p, ...h.map((x) => ({ ...x, isIng: true }))];
 }
 let prodCat = null;
-function prodCatOf(p) { return p.isIng ? "半製品" : (p.category || "その他"); }
+function prodCatOf(p) { return p.isIng ? (p.category === "生地" ? "生地" : "半製品") : (p.category || "その他"); }
+// 見分ける文字は名前の先頭に置く（末尾だと折り返しで読まれない・genba指摘）
+function itemLabel(p) {
+  if (!p.isIng) return esc(p.name);
+  if (p.category === "生地") return `<b>生地｜</b>${esc(p.name.replace(/生地$/, ""))}`;
+  return `${esc(p.name)}〔半製品〕`;
+}
 
 function render() {
   $("today").textContent = jpDate(new Date());
@@ -130,7 +137,7 @@ function cardHtml(t) {
         <button class="btn-revert" onclick="doRevert('${t.id}')">戻す</button></div>`;
     } else {
       const qty = t.completed_quantity != null ? `できあがり ${Number(t.completed_quantity)}個` : "できあがり 予定どおり";
-      const qtyChip = t.task_category === "仕込み" ? `<span class="qty-chip" onclick="editQty('${t.id}')">${qty}</span>` : "";
+      const qtyChip = t.task_category === "仕込み" && !t.ingredient_id ? `<span class="qty-chip" onclick="editQty('${t.id}')">${qty}</span>` : "";
       row = `<div class="row">${qtyChip}
         <span class="chip ${t.member_id ? "setted" : ""}" onclick="openMember('${t.id}')">担当：${esc(t.member_name || "—")}</span>
         <button class="btn-revert" onclick="doRevert('${t.id}')">戻す</button></div>`;
@@ -219,7 +226,7 @@ async function openProductSheet() {
 function setProdCat(c) { prodCat = c; renderProductGrid(); }
 function renderProductGrid() {
   const cats = [...new Set(products.map(prodCatOf))]
-    .sort((a, b) => (a === "半製品") - (b === "半製品") || a.localeCompare(b, "ja"));
+    .sort((a, b) => (a === "半製品") - (b === "半製品") || (a === "生地") - (b === "生地") || a.localeCompare(b, "ja"));
   $("product-cats").innerHTML =
     `<button class="${prodCat === null ? "selected" : ""}" onclick="setProdCat(null)">すべて</button>` +
     cats.map((c) => `<button class="${prodCat === c ? "selected" : ""}" onclick="setProdCat('${esc(c)}')">${esc(c)}</button>`).join("");
@@ -227,7 +234,7 @@ function renderProductGrid() {
   let hits = prodCat ? products.filter((p) => prodCatOf(p) === prodCat) : products;
   if (q) hits = hits.filter((p) => p.name.includes(q));
   $("product-grid").innerHTML =
-    hits.slice(0, 40).map((p) => `<button onclick="pickProduct('${p.id}')">${esc(p.name)}${p.isIng ? "〔半製品〕" : ""}</button>`).join("") +
+    hits.slice(0, 40).map((p) => `<button onclick="pickProduct('${p.id}')">${itemLabel(p)}</button>`).join("") +
     `<button class="other" onclick="pickOther()">その他（自由入力）</button>`;
 }
 function pickProduct(pid) {

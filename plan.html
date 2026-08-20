@@ -40,6 +40,7 @@
       <button type="button" class="combo-toggle" id="f-toggle">▾</button>
     </div>
     <div class="combo-panel" id="f-panel" style="display:none">
+      <div class="picker-hint">こねる＝<b>生地｜◯◯</b>　／　焼く＝<b>◯◯</b></div>
       <div class="cat-chips" id="f-cats"></div>
       <div class="combo-list" id="f-list"></div>
     </div>
@@ -101,11 +102,17 @@ function setKubun(k) {
 let selCat = null;      // カテゴリ絞り込み（nullはすべて）
 let freeText = null;    // 「マスタ外として登録」を明示的に選んだときだけ入る
 
-function itemCat(p) { return p.isIng ? "半製品" : (p.category || "その他"); }
+function itemCat(p) { return p.isIng ? (p.category === "生地" ? "生地" : "半製品") : (p.category || "その他"); }
+// 見分ける文字は名前の先頭に置く（末尾だと折り返しで読まれない・genba指摘）
+function itemLabel(p) {
+  if (!p.isIng) return esc(p.name);
+  if (p.category === "生地") return `<b>生地｜</b>${esc(p.name.replace(/生地$/, ""))}`;
+  return `${esc(p.name)}〔半製品〕`;
+}
 function catList() {
   const cats = [...new Set(candidates().map(itemCat))];
-  // 半製品は末尾に固定
-  return cats.sort((a, b) => (a === "半製品") - (b === "半製品") || a.localeCompare(b, "ja"));
+  // 生地・半製品は末尾に固定（生地→半製品の順）
+  return cats.sort((a, b) => (a === "半製品") - (b === "半製品") || (a === "生地") - (b === "生地") || a.localeCompare(b, "ja"));
 }
 
 function openPanel() { $("f-panel").style.display = "block"; renderPanel(); }
@@ -120,10 +127,10 @@ function renderPanel() {
   let list = candidates();
   if (selCat) list = list.filter((p) => itemCat(p) === selCat);
   if (q) list = list.filter((p) => p.name.includes(q) || norm(p.name).includes(norm(q)));
-  let html = list.slice(0, 30).map((p) =>
-    `<button type="button" onclick="pick('${p.id}')">${esc(p.name)}${p.isIng ? "〔半製品〕" : ""}</button>`).join("");
+  let html = list.slice(0, 40).map((p) =>
+    `<button type="button" onclick="pick('${p.id}')">${itemLabel(p)}</button>`).join("");
   if (!list.length) html = `<div class="none">一致する商品がありません</div>`;
-  if (list.length > 30) html += `<div class="none">ほか${list.length - 30}件（打って絞り込んでください）</div>`;
+  if (list.length > 40) html += `<div class="none">ほか${list.length - 40}件（打って絞り込んでください）</div>`;
   // マスタ外は明示ボタンのみ（打っただけでは自由入力にならない）
   if (q && !exactMatch(q)) html += `<button type="button" class="free" onclick="pickFree()">「${esc(q)}」をマスタ外として登録（在庫連動なし）</button>`;
   $("f-list").innerHTML = html;
@@ -268,7 +275,7 @@ if (requireLogin()) {
   renderKubun();
   Promise.all([
     rest("products?select=id,name,category,yield_per_batch&is_active=eq.true&order=name&limit=300"),
-    rest("ingredients?kind=eq.半製品&is_active=eq.true&select=id,name&order=name"),
+    rest("ingredients?kind=eq.半製品&is_active=eq.true&select=id,name,category&order=name"),
   ]).then(([p, h]) => {
     products = p;
     hanseihin = h.map((x) => ({ ...x, isIng: true }));

@@ -255,15 +255,18 @@ function renderAlerts() {
     const cls = a.alert_kind === "不足" ? "alert-red" : "alert-yellow";
     const when = a.alert_kind === "不足"
       ? `${mmdd(a.runout_date)} に不足`
-      : "発注点を下回り・早めに発注";
+      : (a.kind === "購入材料" ? "発注点を下回り・早めに発注" : "残りが少なめ・早めに仕込み");
     // 下限のorder_by_dateは定義上つねに過去日になるので不足のみ表示
-    const orderBy = a.alert_kind === "不足" && a.order_by_date ? `／${mmdd(a.order_by_date)}までに発注` : "";
+    const orderBy = a.alert_kind === "不足" && a.order_by_date && a.kind === "購入材料"
+      ? `／${mmdd(a.order_by_date)}までに発注` : "";
     return `<div class="alert-row ${cls}">
       <div class="alert-main">
         <div class="alert-name">${esc(a.name)}</div>
         <div class="alert-sub">予測 ${fmtAmount(ing, a.projected_g)}・${when}${orderBy}</div>
       </div>
-      <button class="btn-arrive" onclick="openOrder('${a.ingredient_id}')">発注した</button>
+      ${a.kind === "購入材料"
+        ? `<button class="btn-arrive" onclick="openOrder('${a.ingredient_id}')">発注した</button>`
+        : `<span class="tag-shikomi">仕込む</span>`}
     </div>`;
   }).join("");
 }

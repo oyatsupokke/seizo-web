@@ -51,6 +51,7 @@ const SECTIONS = [
   { name: "ナッツ・チョコ", cats: ["ナッツ類", "チョコレート"] },
   { name: "フルーツ・ピューレ", cats: ["果物・野菜", "ピューレ", "ドライフルーツ"] },
   { name: "製菓材料・その他", cats: [] },   // どのセクションにも入らない購入材料の受け皿
+  { name: "生地（冷凍）",   cats: ["生地"] }, // 冷凍庫の生地ストック（Phase D）
   { name: "半製品",         cats: [] },     // kind=半製品はカテゴリに関係なくここ
 ];
 const FALLBACK = "製菓材料・その他";
@@ -69,8 +70,9 @@ function toast(msg) {
 }
 
 function sectionOf(ing) {
-  if (ing.kind === "半製品") return "半製品";
   const cat = (ing.category || "").trim();
+  if (cat === "生地") return "生地（冷凍）";
+  if (ing.kind === "半製品") return "半製品";
   for (const s of SECTIONS) if (s.cats.includes(cat)) return s.name;
   return FALLBACK;
 }
@@ -99,7 +101,6 @@ function theoryG(ing) {
 
 function fmtTheory(ing) {
   const g = theoryG(ing);
-  if (ing.kind === "半製品") return `${Math.round(g)}g`;
   if (ing.order_unit && ing.order_unit_to_g > 0) {
     const n = Math.round((g / ing.order_unit_to_g) * 10) / 10;
     return `${n}${ing.order_unit}`;
@@ -185,7 +186,8 @@ async function startStocktake() {
 function openMeasure(id) {
   target = ingredients.find((i) => i.id === id);
   if (!target) return;
-  const hasUnit = target.kind !== "半製品" && target.order_unit && target.order_unit_to_g > 0;
+  // 生地は「バッチ」単位で数える（発注単位が入っている半製品はその単位で。無ければg）
+  const hasUnit = !!(target.order_unit && target.order_unit_to_g > 0);
   useGram = !hasUnit;
   $("measure-title").textContent = target.name;
   $("measure-theory").textContent = `理論在庫：${fmtTheory(target)}`;
