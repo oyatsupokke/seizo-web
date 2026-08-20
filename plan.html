@@ -46,8 +46,9 @@
     <div id="f-work-wrap" style="display:none">
       <label>作業</label>
       <div class="seg" id="f-work">
-        <button type="button" onclick="setWork('dough')">🧊 生地を作る（冷凍ストック）</button>
-        <button type="button" onclick="setWork('bake')">🔥 焼く</button>
+        <button type="button" onclick="setWork('weigh')">⚖️ 計量</button>
+        <button type="button" onclick="setWork('dough')">🥣 仕込み</button>
+        <button type="button" onclick="setWork('bake')">🔥 焼成</button>
       </div>
     </div>
     <div class="bind-state" id="f-bind"></div>
@@ -103,8 +104,9 @@ function renderKubun() {
 function setKubun(k) {
   selKubun = k; renderKubun();
   if (selProduct?.isIng && k !== "仕込み") { selProduct = null; $("f-search").value = ""; }
+  if (k !== "仕込み") selWork = null;
   if (selCat && !catList().includes(selCat)) selCat = null;
-  renderPanel(); renderBind();
+  renderWork(); renderPanel(); renderBind();
 }
 
 /* ---------- 商品コンボボックス（一覧から選ぶ＝紐づけ保証。打つと絞り込み。マスタ外は明示ボタンのみ） ---------- */
@@ -141,6 +143,16 @@ function renderPanel() {
     `<button type="button" onclick="pick('${p.id}')">${itemLabel(p)}</button>`).join("");
   if (!list.length) html = `<div class="none">一致する商品がありません</div>`;
   if (list.length > 40) html += `<div class="none">ほか${list.length - 40}件（打って絞り込んでください）</div>`;
+  // 「生地」で探した人への案内（生地は一覧に出さない設計の蓋・genba指摘）
+  if (q && selKubun === "仕込み") {
+    const nq = norm(q);
+    const hits2 = Object.entries(doughFor)
+      .filter(([, d]) => d.name.includes(q) || norm(d.name).includes(nq))
+      .filter(([pid]) => !list.some((p) => p.id === pid))
+      .slice(0, 5);
+    html += hits2.map(([pid, d]) =>
+      `<button type="button" class="free" onclick="pickDough('${pid}')">🧊 ${esc(d.name)}を作る（商品「${esc(candidates().find((p) => p.id === pid)?.name || "")}」の生地）</button>`).join("");
+  }
   // マスタ外は明示ボタンのみ（打っただけでは自由入力にならない）
   if (q && !exactMatch(q)) html += `<button type="button" class="free" onclick="pickFree()">「${esc(q)}」をマスタ外として登録（在庫連動なし）</button>`;
   $("f-list").innerHTML = html;
@@ -160,15 +172,17 @@ function pick(pid) {
 
 /* 生地がある商品だけ「作業」を選ぶ（生地を作る／焼く） */
 function renderWork() {
-  const has = selProduct && !selProduct.isIng && doughFor[selProduct.id];
+  const has = selKubun === "仕込み" && selProduct && !selProduct.isIng && doughFor[selProduct.id];
   $("f-work-wrap").style.display = has ? "block" : "none";
   if (has) {
     const btns = $("f-work").querySelectorAll("button");
-    btns[0].classList.toggle("selected", selWork === "dough");
-    btns[1].classList.toggle("selected", selWork === "bake");
+    btns[0].classList.toggle("selected", selWork === "weigh");
+    btns[1].classList.toggle("selected", selWork === "dough");
+    btns[2].classList.toggle("selected", selWork === "bake");
   }
 }
 function setWork(w) { selWork = w; renderWork(); renderBind(); }
+function pickDough(pid) { pick(pid); setWork("dough"); }
 function pickFree() {
   freeText = $("f-search").value.trim();
   selProduct = null;
@@ -181,16 +195,19 @@ function renderBind() {
   const el = $("f-bind");
   const text = $("f-search").value.trim();
   if (selProduct) {
-    const dough = !selProduct.isIng && doughFor[selProduct.id];
+    const dough = selKubun === "仕込み" && !selProduct.isIng && doughFor[selProduct.id];
     if (dough && !selWork) {
       el.className = "bind-state warn";
-      el.textContent = "作業を選んでください（生地を作る？ 焼く？）";
+      el.textContent = "作業内容を選んでください（計量？ 仕込み？ 焼成？）";
+    } else if (dough && selWork === "weigh") {
+      el.className = "bind-state ok";
+      el.textContent = `✔ ${dough.name}の計量（記録のみ・在庫は動きません）`;
     } else if (dough && selWork === "dough") {
       el.className = "bind-state ok";
-      el.textContent = `✔ ${dough.name}を作って冷凍ストック（材料が減り、生地が増えます）`;
+      el.textContent = `✔ ${dough.name}の仕込み（材料が減り、生地が増えます）`;
     } else if (dough && selWork === "bake") {
       el.className = "bind-state ok";
-      el.textContent = `✔ ${selProduct.name}を焼く（${dough.name}のストックが減ります）`;
+      el.textContent = `✔ ${selProduct.name}の焼成（${dough.name}のストックが減ります）`;
     } else {
       el.className = "bind-state ok";
       el.textContent = `✔ ${selProduct.name}${selProduct.isIng ? "〔半製品〕" : ""}（レシピ・在庫連動あり）`;
@@ -235,11 +252,13 @@ $("form").addEventListener("submit", async (e) => {
     tenant_id: await myTenantId(),
   };
   if (selProduct && !selProduct.isIng && doughFor[selProduct.id] && !selWork && selKubun === "仕込み") {
-    renderWork(); toast("作業を選んでください（生地を作る？ 焼く？）"); return;
+    renderWork(); toast("作業内容を選んでください（計量？ 仕込み？ 焼成？）"); return;
   }
   if (selProduct) {
+    const dough = selKubun === "仕込み" && !selProduct.isIng && doughFor[selProduct.id];
     if (selProduct.isIng) row.ingredient_id = selProduct.id;
-    else if (selWork === "dough" && doughFor[selProduct.id]) row.ingredient_id = doughFor[selProduct.id].id;
+    else if (dough && selWork === "weigh") row.title = `${dough.name} 計量`;   // 記録のみ（在庫連動なし）
+    else if (dough && selWork === "dough") row.ingredient_id = dough.id;
     else row.product_id = selProduct.id;
   }
   else row.title = freeText;

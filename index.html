@@ -26,10 +26,11 @@
   <div class="grid" id="product-grid" style="margin-top:8px;"></div>
 </div>
 <div class="sheet" id="sheet-work">
-  <h2 id="work-title">どっちの作業？</h2>
+  <h2 id="work-title">作業内容は？</h2>
   <div class="grid">
-    <button onclick="pickWork('dough')">🧊 生地を作る<br><small>冷凍ストックに追加</small></button>
-    <button onclick="pickWork('bake')">🔥 焼く<br><small>冷凍生地を使う</small></button>
+    <button onclick="pickWork('weigh')">⚖️ 計量<br><small>記録のみ・在庫は動かない</small></button>
+    <button onclick="pickWork('dough')">🥣 仕込み<br><small>生地を作って冷凍（材料↓ 生地↑）</small></button>
+    <button onclick="pickWork('bake')">🔥 焼成<br><small>冷凍生地を使う（生地↓）</small></button>
   </div>
 </div>
 <div class="sheet" id="sheet-batch">
@@ -246,9 +247,17 @@ function renderProductGrid() {
   const q = $("product-search").value.trim();
   let hits = prodCat ? products.filter((p) => prodCatOf(p) === prodCat) : products;
   if (q) hits = hits.filter((p) => p.name.includes(q));
-  $("product-grid").innerHTML =
-    hits.slice(0, 40).map((p) => `<button onclick="pickProduct('${p.id}')">${itemLabel(p)}</button>`).join("") +
-    `<button class="other" onclick="pickOther()">その他（自由入力）</button>`;
+  let html = hits.slice(0, 40).map((p) => `<button onclick="pickProduct('${p.id}')">${itemLabel(p)}</button>`).join("");
+  // 「生地」で探した人への案内（生地は一覧に出さない設計の蓋・genba指摘）
+  if (q) {
+    html += Object.entries(doughFor)
+      .filter(([, d]) => d.name.includes(q))
+      .filter(([pid]) => !hits.some((p) => p.id === pid))
+      .slice(0, 5)
+      .map(([pid, d]) => `<button class="other" onclick="pickProduct('${pid}');pickWork('dough')">🥣 ${esc(d.name)}の仕込み</button>`)
+      .join("");
+  }
+  $("product-grid").innerHTML = html + `<button class="other" onclick="pickOther()">その他（自由入力）</button>`;
 }
 let pendingWork = null;  // 'dough' | 'bake'
 function pickProduct(pid) {
@@ -265,9 +274,10 @@ function pickProduct(pid) {
 function pickWork(w) {
   pendingWork = w;
   const d = doughFor[pendingProduct.id];
-  $("batch-title").textContent = w === "dough"
-    ? `${d.name}を作る：何バッチ？`
-    : `${pendingProduct.name}を焼く：何バッチ？`;
+  $("batch-title").textContent =
+    w === "weigh" ? `${d.name}の計量：何バッチ分？`
+    : w === "dough" ? `${d.name}の仕込み：何バッチ？`
+    : `${pendingProduct.name}の焼成：何バッチ？`;
   hide("sheet-work"); show("sheet-batch");
 }
 async function quickAdd(n) {
@@ -280,7 +290,14 @@ async function quickAdd(n) {
   closeSheets();
   try {
     const doughId = pendingWork === "dough" ? doughFor[pendingProduct.id].id : null;
-    if (pendingProduct.isIng || doughId) {
+    if (pendingWork === "weigh") {
+      // 計量＝記録だけのタスク（在庫は仕込み完了で動かすので二重計上しない）
+      const tid = await rpc("fn_my_tenant_id");
+      await insert("production_plans", {
+        tenant_id: tid, plan_date: todayStr(), task_category: "仕込み",
+        title: `${doughFor[pendingProduct.id].name} 計量`, batch_count: n, source: "app",
+      });
+    } else if (pendingProduct.isIng || doughId) {
       // 半製品・生地はfn_quick_planが未対応なので直接insert（RLS越し・当日の予定として登録）
       const tid = await rpc("fn_my_tenant_id");
       await insert("production_plans", {
