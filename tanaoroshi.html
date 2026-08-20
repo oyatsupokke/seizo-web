@@ -21,12 +21,17 @@
 <div class="sheet" id="sheet-measure">
   <h2 id="measure-title">実測は？</h2>
   <div class="hint" id="measure-theory"></div>
-  <div class="seg" id="measure-units" style="margin:8px 0 4px;"></div>
-  <div class="qty-row">
-    <input type="number" id="measure-qty" inputmode="decimal" step="0.5" min="0" oninput="showConv()">
-    <span class="unit-label" id="measure-unit"></span>
+  <div id="measure-normal">
+    <div class="seg" id="measure-units" style="margin:8px 0 4px;"></div>
+    <div class="qty-row">
+      <input type="number" id="measure-qty" inputmode="decimal" step="0.5" min="0" oninput="showConv()">
+      <span class="unit-label" id="measure-unit"></span>
+    </div>
+    <div class="hint" id="measure-conv" style="font-weight:700;"></div>
   </div>
-  <div class="hint" id="measure-conv" style="font-weight:700;"></div>
+  <div id="measure-free" style="display:none;">
+    <input type="text" id="measure-raw" placeholder="例：2袋／500g／3本と半分／2kgの袋が2つ" style="width:100%; font-size:1.1rem; padding:12px;">
+  </div>
   <div class="hint" id="measure-hint"></div>
   <div class="row">
     <button class="btn-finish" onclick="saveMeasure()">✔ 記録</button>
@@ -63,6 +68,8 @@ let items = {};           // ingredient_id -> stocktake_item
 let closed = [];          // 締めたセクション
 let target = null, useGram = false;
 let prevUnit = {};        // ingredient_id -> 前回棚卸で使った単位（数え方の記憶）
+let freeMode = false;     // 初回棚卸＝完全自由入力（見たまま書く→あとでClaudeが振り分け）
+let raws = {};            // ingredient_id -> 自由入力の生テキスト（snapshot._raw_inputs）
 
 function toast(msg) {
   const t = $("toast");
@@ -92,13 +99,16 @@ async function load() {
     closed = (st.snapshot && st.snapshot._closed_locations) || [];
   }
   // 前回（確定済み）棚卸の入力単位＝その材料の「数え方」を覚えておく
+  // 確定済みが1件も無ければ初回＝完全自由入力モード（まりほ指定 2026-08-20）
   try {
     const prev = await rest("stocktakes?status=eq.確定&select=id&order=taken_on.desc&limit=1");
+    freeMode = !prev.length;
     if (prev.length) {
       const pits = await rest(`stocktake_items?stocktake_id=eq.${prev[0].id}&select=ingredient_id,measured_unit`);
       prevUnit = Object.fromEntries(pits.map((i) => [i.ingredient_id, i.measured_unit]));
     }
   } catch (e) { console.error(e); }
+  raws = (st?.snapshot && st.snapshot._raw_inputs) || {};
   render();
 }
 
@@ -145,11 +155,13 @@ function render() {
   const secs = SECTIONS.map((s) => s.name).filter((n) => groups[n]);
 
   const allClosed = secs.every((n) => closed.includes(n));
-  const doneCount = Object.keys(items).length;
+  const doneCount = freeMode ? Object.keys(raws).length : Object.keys(items).length;
 
   let html = `<div class="stocktake-head">
-    <div>${mmdd(st.taken_on)} 開始の棚卸（入力中）</div>
-    <div class="alert-sub">実測を入れたのは ${doneCount}件。入れなかった材料は「アプリの数字どおり」として扱われます。厨房と予備置き場、両方あわせた量で数えてください</div>
+    <div>${mmdd(st.taken_on)} 開始の棚卸（入力中${freeMode ? "・初回＝見たまま書くだけでOK" : ""}）</div>
+    <div class="alert-sub">${freeMode
+      ? `書いたのは ${doneCount}件。「2袋」「500g」「3本と半分」「2kgの袋が2つ」など<b>見たまま</b>で大丈夫。単位や換算はあとでClaudeが整理します。厨房と予備、あわせた量で`
+      : `実測を入れたのは ${doneCount}件。入れなかった材料は「アプリの数字どおり」として扱われます。厨房と予備置き場、両方あわせた量で数えてください`}</div>
   </div>`;
 
   for (const sec of secs) {
@@ -163,10 +175,14 @@ function render() {
       </div>`;
     for (const ing of groups[sec]) {
       const it = items[ing.id];
-      html += `<div class="tana-row${it ? " measured" : ""}">
+      const raw = raws[ing.id];
+      const val = freeMode
+        ? (raw ? `📝 ${esc(raw)}` : "未記入")
+        : (it ? `実測 ${fmtMeasured(it)}` : `記録 ${fmtTheory(ing)}`);
+      html += `<div class="tana-row${(freeMode ? raw : it) ? " measured" : ""}">
         <div class="tana-main" onclick="openMeasure('${ing.id}')">
           <span class="tana-name">${esc(ing.name)}</span>
-          <span class="tana-val">${it ? `実測 ${fmtMeasured(it)}` : `記録 ${fmtTheory(ing)}`}</span>
+          <span class="tana-val">${val}</span>
         </div>
       </div>`;
     }
@@ -196,6 +212,19 @@ async function startStocktake() {
 function openMeasure(id) {
   target = ingredients.find((i) => i.id === id);
   if (!target) return;
+  if (freeMode) {
+    $("measure-title").textContent = target.name;
+    $("measure-theory").textContent = "";
+    $("measure-normal").style.display = "none";
+    $("measure-free").style.display = "";
+    $("measure-raw").value = raws[id] || "";
+    $("measure-hint").textContent = "見たまま書けばOK。厨房と予備、あわせた量で";
+    show("sheet-measure");
+    $("measure-raw").focus();
+    return;
+  }
+  $("measure-normal").style.display = "";
+  $("measure-free").style.display = "none";
   const hasUnit = !!(target.order_unit && target.order_unit_to_g > 0);
   // 数え方の初期値：この棚卸で入れた単位 → 前回棚卸の単位 → 発注単位 → g
   const it = items[id];
@@ -240,6 +269,20 @@ function showConv() {
 }
 
 async function saveMeasure() {
+  if (freeMode) {
+    const txt = $("measure-raw").value.trim();
+    if (txt) raws[target.id] = txt; else delete raws[target.id];
+    try {
+      const snapshot = { ...(st.snapshot || {}), _raw_inputs: raws };
+      await apiFetch(`/rest/v1/stocktakes?id=eq.${st.id}`, {
+        method: "PATCH", body: JSON.stringify({ snapshot }),
+      });
+      st.snapshot = snapshot;
+      closeSheets();
+      render();
+    } catch (e) { toast("記録に失敗しました"); console.error(e); }
+    return;
+  }
   const v = Number($("measure-qty").value);
   if ($("measure-qty").value === "" || v < 0) { toast("数量を入れてください"); return; }
   const hasUnit = !useGram && target.order_unit && target.order_unit_to_g > 0;
@@ -286,6 +329,13 @@ async function reopenLoc(sec) {
 let stalePOs = [];
 
 async function confirmStocktake() {
+  if (freeMode) {
+    const pending = Object.keys(raws).filter((id) => !items[id]);
+    if (pending.length) {
+      alert(`自由入力の振り分けがまだです（${pending.length}件）。\nClaudeに「棚卸の振り分けして」と伝えてください。\n振り分けが済むと確定できるようになります。`);
+      return;
+    }
+  }
   const since = new Date(Date.now() - 5 * 86400000).toISOString().slice(0, 10);
   stalePOs = await rest(`purchase_orders?status=eq.発注済&ordered_on=lte.${since}&select=*&order=ordered_on`).catch(() => []);
   if (stalePOs.length) { renderStalePOs(); show("sheet-stale-po"); return; }
