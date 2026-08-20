@@ -55,6 +55,8 @@
     <div class="detail" id="f-yield" style="margin:6px 2px"></div>
     <label>バッチ数</label>
     <input type="number" id="f-batch" value="1" min="0.5" step="0.5">
+    <label>開始時刻（任意）</label>
+    <input type="time" id="f-time" step="300">
     <label>メモ（任意）</label>
     <input type="text" id="f-memo">
     <div style="margin-top:18px"><button class="btn-primary" type="submit">登録する</button></div>
@@ -243,8 +245,10 @@ $("form").addEventListener("submit", async (e) => {
     selProduct = exactMatch(text);
     if (!selProduct) { openPanel(); toast("一覧から選んでください（マスタ外は黄色いボタン）"); return; }
   }
+  const t = $("f-time").value;   // "HH:MM" or ""
   const row = {
     plan_date: date,
+    planned_start: t ? `${date}T${t}:00+09:00` : null,
     task_category: selKubun,
     batch_count: Number($("f-batch").value) || 1,
     memo: $("f-memo").value.trim() || null,
@@ -268,7 +272,9 @@ $("form").addEventListener("submit", async (e) => {
       ? `登録しました：${mmdd(date)} ${selKubun}「${selProduct.name}」（マスタ紐づけ✔）`
       : `登録しました：${mmdd(date)} ${selKubun}「${freeText}」（マスタ外・在庫連動なし）`;
     // 連続登録モード：日付・区分は保持、商品・メモだけクリア
-    selProduct = null; freeText = null; $("f-search").value = ""; $("f-memo").value = ""; $("f-yield").textContent = "";
+    selProduct = null; freeText = null; selWork = null;
+    $("f-search").value = ""; $("f-memo").value = ""; $("f-time").value = ""; $("f-yield").textContent = "";
+    renderWork();
     closePanel(); renderBind(); loadWeek();
   } catch (err) { toast("登録に失敗しました"); console.error(err); }
 });
@@ -292,7 +298,7 @@ async function loadWeek() {
   const endD = new Date(weekStart); endD.setDate(endD.getDate() + 6);
   const to = iso(endD);
   $("wk-label").textContent = `${mmdd(from)} 〜 ${mmdd(to)}`;
-  const rows = await rest(`production_plans?select=*,products(name),ingredients(name)&plan_date=gte.${from}&plan_date=lte.${to}&order=plan_date,created_at`);
+  const rows = await rest(`production_plans?select=*,products(name),ingredients(name)&plan_date=gte.${from}&plan_date=lte.${to}&order=plan_date,planned_start.nullslast,created_at`);
   const byDay = {};
   for (const r of rows) (byDay[r.plan_date] ||= []).push(r);
   const days = ["月","火","水","木","金","土","日"];
@@ -307,13 +313,15 @@ async function loadWeek() {
       const cls = KUBUN_CLASS[r.task_category] || "sonota";
       const st = r.status === "完了" ? "st-done" : "";
       const batch = !r.title && r.batch_count ? ` ×${Number(r.batch_count)}` : "";
+      const tm = r.planned_start
+        ? `<b>${new Date(r.planned_start).toLocaleTimeString("ja-JP", { hour: "numeric", minute: "2-digit" })}</b> ` : "";
       // 仕込みなのに紐づいていない行＝在庫連動なし。翌朝の一覧で気づけるようにマークする
       const freeMark = r.task_category === "仕込み" && !r.product_id && !r.ingredient_id
         ? ' <span class="free-mark">自由</span>' : "";
       const canDel = r.status === "予定" && r.source === "app";
       html += `<div class="mini-card ${st}" style="border-left-color:var(--c-${cls})">
         <span><span class="kubun" style="background:var(--c-${cls})">${esc(r.task_category)}</span>
-        ${esc(name)}${batch}${freeMark}${r.status !== "予定" ? `・${r.status}` : ""}</span>
+        ${tm}${esc(name)}${batch}${freeMark}${r.status !== "予定" ? `・${r.status}` : ""}</span>
         ${canDel ? `<span class="del" onclick="delPlan('${r.id}')">削除</span>` : ""}</div>`;
     }
     if (!(byDay[key] || []).length) html += `<div class="detail" style="margin:2px 6px">—</div>`;

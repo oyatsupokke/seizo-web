@@ -126,6 +126,8 @@ function cardHtml(t) {
   const doneCls = t.status === "完了" ? " done" : "";
   let badges = "";
   if (t.is_carryover && t.status !== "完了") badges += `<span class="badge carry">${mmdd(t.plan_date)}から持ち越し</span>`;
+  if (t.planned_start && t.status !== "完了")
+    badges += `<span class="badge time">⏰ ${new Date(t.planned_start).toLocaleTimeString("ja-JP", { hour: "numeric", minute: "2-digit" })}〜</span>`;
   if (t.badge) badges += `<span class="badge time">${esc(t.badge)}</span>`;
   if (t.status === "仕込中") badges += `<span class="badge running">作業中 ${elapsedMin(t)}分</span>`;
   if (t.status === "完了" && t.actual_minutes) badges += `<span class="badge">実績 ${t.actual_minutes}分</span>`;
