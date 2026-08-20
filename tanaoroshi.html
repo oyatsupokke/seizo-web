@@ -21,14 +21,15 @@
 <div class="sheet" id="sheet-measure">
   <h2 id="measure-title">実測は？</h2>
   <div class="hint" id="measure-theory"></div>
+  <div class="seg" id="measure-units" style="margin:8px 0 4px;"></div>
   <div class="qty-row">
-    <input type="number" id="measure-qty" inputmode="decimal" step="0.5" min="0">
+    <input type="number" id="measure-qty" inputmode="decimal" step="0.5" min="0" oninput="showConv()">
     <span class="unit-label" id="measure-unit"></span>
   </div>
+  <div class="hint" id="measure-conv" style="font-weight:700;"></div>
   <div class="hint" id="measure-hint"></div>
   <div class="row">
     <button class="btn-finish" onclick="saveMeasure()">✔ 記録</button>
-    <button class="btn-revert" id="unit-toggle" onclick="toggleUnit()" style="display:none;">gで入力する</button>
   </div>
 </div>
 <div class="sheet" id="sheet-stale-po">
@@ -61,6 +62,7 @@ let ingredients = [];     // 有効材料すべて
 let items = {};           // ingredient_id -> stocktake_item
 let closed = [];          // 締めたセクション
 let target = null, useGram = false;
+let prevUnit = {};        // ingredient_id -> 前回棚卸で使った単位（数え方の記憶）
 
 function toast(msg) {
   const t = $("toast");
@@ -89,6 +91,14 @@ async function load() {
     items = Object.fromEntries(its.map((i) => [i.ingredient_id, i]));
     closed = (st.snapshot && st.snapshot._closed_locations) || [];
   }
+  // 前回（確定済み）棚卸の入力単位＝その材料の「数え方」を覚えておく
+  try {
+    const prev = await rest("stocktakes?status=eq.確定&select=id&order=taken_on.desc&limit=1");
+    if (prev.length) {
+      const pits = await rest(`stocktake_items?stocktake_id=eq.${prev[0].id}&select=ingredient_id,measured_unit`);
+      prevUnit = Object.fromEntries(pits.map((i) => [i.ingredient_id, i.measured_unit]));
+    }
+  } catch (e) { console.error(e); }
   render();
 }
 
@@ -103,9 +113,9 @@ function fmtTheory(ing) {
   const g = theoryG(ing);
   if (ing.order_unit && ing.order_unit_to_g > 0) {
     const n = Math.round((g / ing.order_unit_to_g) * 10) / 10;
-    return `${n}${ing.order_unit}`;
+    return `${n}${ing.order_unit}（${Math.round(g).toLocaleString()}g）`;
   }
-  return `${Math.round(g)}g`;
+  return `${Math.round(g).toLocaleString()}g`;
 }
 
 function fmtMeasured(it) {
@@ -118,8 +128,8 @@ function render() {
   if (!st) {
     el.innerHTML = `<div class="empty" style="padding-top:60px;">
       棚卸はまだ始まっていません。<br><br>
-      始めると、その時点の理論在庫が記録されます。<br>
-      数えるのは<b>理論在庫と違う物だけ</b>でOK。<br>
+      始めると、その時点の「アプリ上の残り」が記録されます。<br>
+      数えるのは<b>実物がアプリの数字と違う物だけ</b>でOK。<br>
       グループごとに分担して、別の日に続きをやっても大丈夫です。<br><br>
       <button class="btn-primary" style="max-width:320px;" onclick="startStocktake()">📋 棚卸をはじめる</button>
     </div>`;
@@ -139,7 +149,7 @@ function render() {
 
   let html = `<div class="stocktake-head">
     <div>${mmdd(st.taken_on)} 開始の棚卸（入力中）</div>
-    <div class="alert-sub">実測を入れたのは ${doneCount}件。入れなかった材料は「理論在庫どおり」として扱われます。厨房と予備置き場、両方あわせた量で数えてください</div>
+    <div class="alert-sub">実測を入れたのは ${doneCount}件。入れなかった材料は「アプリの数字どおり」として扱われます。厨房と予備置き場、両方あわせた量で数えてください</div>
   </div>`;
 
   for (const sec of secs) {
@@ -156,7 +166,7 @@ function render() {
       html += `<div class="tana-row${it ? " measured" : ""}">
         <div class="tana-main" onclick="openMeasure('${ing.id}')">
           <span class="tana-name">${esc(ing.name)}</span>
-          <span class="tana-val">${it ? `実測 ${fmtMeasured(it)}` : `理論 ${fmtTheory(ing)}`}</span>
+          <span class="tana-val">${it ? `実測 ${fmtMeasured(it)}` : `記録 ${fmtTheory(ing)}`}</span>
         </div>
       </div>`;
     }
@@ -186,14 +196,14 @@ async function startStocktake() {
 function openMeasure(id) {
   target = ingredients.find((i) => i.id === id);
   if (!target) return;
-  // 生地は「バッチ」単位で数える（発注単位が入っている半製品はその単位で。無ければg）
   const hasUnit = !!(target.order_unit && target.order_unit_to_g > 0);
-  useGram = !hasUnit;
-  $("measure-title").textContent = target.name;
-  $("measure-theory").textContent = `理論在庫：${fmtTheory(target)}`;
+  // 数え方の初期値：この棚卸で入れた単位 → 前回棚卸の単位 → 発注単位 → g
   const it = items[id];
+  const remembered = it?.measured_unit || prevUnit[id] || null;
+  useGram = hasUnit ? (remembered ? remembered === "g" : false) : true;
+  $("measure-title").textContent = target.name;
+  $("measure-theory").textContent = `いまアプリ上の残り：${fmtTheory(target)}`;
   $("measure-qty").value = it ? Number(it.measured_amount) : "";
-  $("unit-toggle").style.display = hasUnit ? "block" : "none";
   applyUnitLabel();
   show("sheet-measure");
   $("measure-qty").focus();
@@ -201,16 +211,33 @@ function openMeasure(id) {
 
 function applyUnitLabel() {
   const hasUnit = !useGram && target.order_unit && target.order_unit_to_g > 0;
+  const canUnit = !!(target.order_unit && target.order_unit_to_g > 0);
+  // 単位はチップで選ぶ（材料ごと・前回の選択を記憶）。中身のgを常に併記して曖昧さをなくす
+  $("measure-units").innerHTML = canUnit
+    ? `<button type="button" class="${!useGram ? "selected" : ""}" onclick="setUnit(false)">${esc(target.order_unit)}で数える（1${esc(target.order_unit)}=${Number(target.order_unit_to_g).toLocaleString()}g）</button>
+       <button type="button" class="${useGram ? "selected" : ""}" onclick="setUnit(true)">gで入力</button>`
+    : "";
+  $("measure-units").style.display = canUnit ? "" : "none";
   $("measure-unit").textContent = hasUnit ? target.order_unit : "g";
   $("measure-qty").step = hasUnit ? 0.5 : 1;
-  $("unit-toggle").textContent = useGram ? `${target.order_unit}で入力する` : "gで入力する";
   // 「厨房＋予備あわせて」は入力の瞬間に読まれる場所へ常設（genba指定）
   $("measure-hint").textContent = (hasUnit
-    ? `0.5${target.order_unit}きざみでOK（1${target.order_unit} = ${target.order_unit_to_g}g）`
+    ? `0.5${target.order_unit}きざみでOK`
     : "グラムで入力してください") + "。厨房と予備、あわせた量で";
+  showConv();
 }
 
-function toggleUnit() { useGram = !useGram; $("measure-qty").value = ""; applyUnitLabel(); }
+function setUnit(g) { useGram = g; $("measure-qty").value = ""; applyUnitLabel(); }
+
+// 打った瞬間にg換算（またはg→単位換算）を出す＝「1.5袋って結局何g？」を無くす
+function showConv() {
+  const v = Number($("measure-qty").value);
+  const el = $("measure-conv");
+  if (!$("measure-qty").value || !(target.order_unit && target.order_unit_to_g > 0)) { el.textContent = ""; return; }
+  el.textContent = useGram
+    ? `= ${(Math.round((v / target.order_unit_to_g) * 100) / 100)}${target.order_unit}ぶん`
+    : `= ${Math.round(v * target.order_unit_to_g).toLocaleString()}g`;
+}
 
 async function saveMeasure() {
   const v = Number($("measure-qty").value);
@@ -289,7 +316,7 @@ async function resolveStalePO(poId, status) {
 async function proceedConfirm() {
   closeSheets();
   const n = Object.keys(items).length;
-  if (!confirm(`棚卸を確定します（実測 ${n}件・未入力は理論在庫どおり）。\n実測と理論の差が「棚卸補正」として在庫に反映されます。よろしいですか？`)) return;
+  if (!confirm(`棚卸を確定します（実測 ${n}件・未入力はアプリの数字どおり）。\n実物との差が「棚卸補正」として在庫に反映されます。よろしいですか？`)) return;
   try {
     const fixed = await rpc("fn_confirm_stocktake", { p_stocktake_id: st.id });
     toast(`確定しました（補正 ${fixed}件）`);
