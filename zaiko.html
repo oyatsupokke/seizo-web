@@ -16,6 +16,7 @@
   </div>
 </header>
 <main>
+  <div id="temp-ing" style="display:none; background:#fdf3e0; color:#b26a00; border-radius:10px; padding:10px 12px; font-size:.88rem; font-weight:700; margin:8px 0;"></div>
   <div id="po-section"></div>
   <div class="section-label">アラート</div>
   <div id="alerts"><div class="empty">読み込み中…</div></div>
@@ -112,6 +113,18 @@ async function load() {
   renderAlerts();
   renderSearch();
   renderUncovered(un);
+  renderTempIng();
+}
+
+// レシピ画面で仮登録された材料（単価未設定）をまりほが毎日見る場所に出す（genba：見に行く場所を増やしたら負け）
+async function renderTempIng() {
+  try {
+    const t = await rest("ingredients?category=eq.未分類&is_active=eq.true&select=name&order=created_at.desc");
+    const el = $("temp-ing");
+    if (!t.length) { el.style.display = "none"; return; }
+    el.style.display = "block";
+    el.textContent = `⚠ 単価未設定の材料 ${t.length}件（レシピ画面で仮登録）：${t.map((x) => x.name).join("・")} — 原価に乗らないので設定が必要です`;
+  } catch {}
 }
 
 /* ---------- 発注済み一覧（届いたらチェック） ---------- */
