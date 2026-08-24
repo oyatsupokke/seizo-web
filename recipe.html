@@ -100,6 +100,7 @@
 <script>
 const DRAFT_KEY = "seizo_recipe_draft";
 let products = [], hanseihin = [], ingredients = [];
+let hasRecipe = new Set();  // レシピ登録済みのproduct_id/ingredient_id（一覧で有無を見せる）
 let target = null;          // {id, name, isIng, category, yield_per_batch}
 let rows = [];              // [{iid, name, isHansei, g}]
 let oldItems = null;        // 既存レシピの材料（差分表示用）。新規はnull
@@ -131,7 +132,13 @@ function renderTPanel(){
   let list = tCandidates();
   if (selCat) list = list.filter((p)=>itemCat(p)===selCat);
   if (q) list = list.filter((p)=>p.name.includes(q) || norm(p.name).includes(norm(q)));
-  let html = list.slice(0,40).map((p)=>`<button type="button" onclick="pickTarget('${p.id}',${p.isIng?1:0})">${itemLabel(p)}</button>`).join("");
+  // レシピの有無を一覧の時点で見せる（まりほ指摘：名前が出ると「あるっぽい」のに押すと新規でややこしい）
+  let html = list.slice(0,40).map((p)=>{
+    const mark = hasRecipe.has(p.id)
+      ? ` <span style="font-size:.8rem">📖</span>`
+      : ` <span style="font-size:.72rem; color:#b26a00; background:#fdf3e0; border-radius:6px; padding:1px 6px; font-weight:700">レシピなし→新規</span>`;
+    return `<button type="button" onclick="pickTarget('${p.id}',${p.isIng?1:0})">${itemLabel(p)}${mark}</button>`;
+  }).join("");
   if (!list.length) html = `<div class="none">一致するものがありません</div>`;
   if (list.length > 40) html += `<div class="none">ほか${list.length-40}件（打って絞り込んでください）</div>`;
   // マスタに無い名前＝新商品・新生地。ここが新規レシピの入口（まりほ指摘：新規なら選ぶものが無い）
@@ -341,6 +348,7 @@ async function doSave(){
       p_yield: yieldN,
     });
     if (yieldN) target.yield_per_batch = yieldN;
+    hasRecipe.add(target.id);
     closeConfirm();
     localStorage.removeItem(DRAFT_KEY);
     // 保存後プレビュー（自分の入力を最終確認できる・📖と同じ見え方）
@@ -379,10 +387,12 @@ if (requireLogin()){
   Promise.all([
     rest("products?select=id,name,category,yield_per_batch&is_active=eq.true&order=name&limit=300"),
     rest("ingredients?select=id,name,category,kind,is_active&is_active=eq.true&order=name&limit=500"),
-  ]).then(([p, ing])=>{
+    rest("recipes?select=product_id,ingredient_id&is_active=is.true&limit=1000"),
+  ]).then(([p, ing, rcp])=>{
     products = p;
     ingredients = ing;
     hanseihin = ing.filter((x)=>x.kind==="半製品").map((x)=>({ ...x, isIng: true }));
+    hasRecipe = new Set(rcp.map((r)=>r.product_id || r.ingredient_id));
     checkDraft();
   }).catch(()=>toast("読み込みエラー"));
 }
