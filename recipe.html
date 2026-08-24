@@ -47,9 +47,9 @@
 <main>
   <div class="draft-bar" id="draft-bar">✍️ 書きかけのレシピがあります<button onclick="restoreDraft()">復元する</button><button style="background:#999" onclick="dropDraft()">捨てる</button></div>
 
-  <label>商品・生地を選ぶ（選ぶとレシピが開きます・無ければ新規）</label>
+  <label>なんのレシピ？（名前を打つ → あれば開く・なければ新規作成）</label>
   <div class="combo">
-    <input type="text" id="t-search" placeholder="タップして一覧から選ぶ／打つと絞り込み" autocomplete="off">
+    <input type="text" id="t-search" placeholder="商品・生地の名前（例：バターサブレ）" autocomplete="off">
     <button type="button" class="combo-toggle" id="t-toggle">▾</button>
   </div>
   <div class="combo-panel" id="t-panel" style="display:none">
@@ -134,7 +134,33 @@ function renderTPanel(){
   let html = list.slice(0,40).map((p)=>`<button type="button" onclick="pickTarget('${p.id}',${p.isIng?1:0})">${itemLabel(p)}</button>`).join("");
   if (!list.length) html = `<div class="none">一致するものがありません</div>`;
   if (list.length > 40) html += `<div class="none">ほか${list.length-40}件（打って絞り込んでください）</div>`;
+  // マスタに無い名前＝新商品・新生地。ここが新規レシピの入口（まりほ指摘：新規なら選ぶものが無い）
+  if (q && !tCandidates().some((p)=>norm(p.name)===norm(q))){
+    html += `<button type="button" class="free" onclick="createTarget('product')">🆕 新しい商品「${esc(q)}」としてレシピを作る</button>`;
+    html += `<button type="button" class="free" onclick="createTarget('dough')">🧊 新しい生地「${esc(q)}」としてレシピを作る（冷凍ストック用）</button>`;
+  }
   $("t-list").innerHTML = html;
+}
+
+// 新しい商品／生地をその場で作ってレシピ登録に進む
+async function createTarget(kind){
+  const name = $("t-search").value.trim();
+  if (!name) return;
+  try {
+    if (kind === "product"){
+      const [row] = await insert("products", { tenant_id: await myTenantId(), name, is_active: true });
+      products.push(row);
+      toast(`商品「${name}」を登録しました`);
+      await pickTarget(row.id, 0);
+    } else {
+      const [row] = await insert("ingredients", { tenant_id: await myTenantId(), name, category: "生地", kind: "半製品", unit: "g", is_active: true });
+      ingredients.push(row);
+      const h = { ...row, isIng: true };
+      hanseihin.push(h);
+      toast(`生地「${name}」を登録しました`);
+      await pickTarget(row.id, 1);
+    }
+  } catch(e){ toast("登録に失敗しました"); console.error(e); }
 }
 function setCat(c){ selCat = c; renderTPanel(); }
 
