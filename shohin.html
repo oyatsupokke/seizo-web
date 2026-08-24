@@ -52,12 +52,12 @@
   <input type="number" id="s-price" inputmode="numeric" min="0" step="1" placeholder="未設定">
   <label>商品説明（EC・接客用）</label>
   <textarea id="s-desc" rows="3"></textarea>
-  <label>販売状況</label>
+  <label>この商品</label>
   <div class="state-seg">
-    <button type="button" id="s-on" onclick="setActive(true)">販売中</button>
-    <button type="button" id="s-off" onclick="setActive(false)">休売</button>
+    <button type="button" id="s-on" onclick="setActive(true)">現役</button>
+    <button type="button" id="s-off" onclick="setActive(false)">アーカイブ（廃番）</button>
   </div>
-  <div class="hint">休売にすると、レシピ登録・製造計画・在庫の商品候補に出なくなります。この画面からいつでも販売中に戻せます</div>
+  <div class="hint">季節商品はそのまま「現役」でOK（作らない時期があるだけなら触らない）。アーカイブはもう作らない商品を各画面の候補から片付けるためのもの。いつでも戻せます</div>
   <button type="button" class="fold-toggle" onclick="toggleFold()">▸ 詳細（表示名・できあがり個数・メモ）</button>
   <div class="fold" id="fold">
     <label>表示名（ラベル用・任意）</label>
@@ -104,7 +104,7 @@ function renderList(){
   $("list").innerHTML = list.map((p)=>`
     <div class="p-row ${p.is_active ? "" : "inactive"}" onclick="openSheet('${p.id}')">
       <span class="nm">${esc(p.name)}${p.description ? " 📝" : ""}</span>
-      ${p.is_active ? "" : `<span class="badge-kyubai">休売</span>`}
+      ${p.is_active ? "" : `<span class="badge-kyubai">アーカイブ</span>`}
       ${p.category ? `<span class="cat">${esc(p.category)}</span>` : ""}
       ${p.price_in_tax != null ? `<span class="price">${yen(p.price_in_tax)}</span>` : (p.is_active ? `<span class="badge-noprice">価格未設定</span>` : "")}
     </div>`).join("") || `<div class="empty">一致する商品がありません</div>`;
@@ -168,11 +168,11 @@ async function save(){
   if (!cur) return;
   const d = diff();
   if (!Object.keys(d).length){ toast("変更はありません"); closeSheet(); return; }
-  // 改名・休売/再開だけは一度確認を挟む（genba：価格・説明は軽く、危ない操作だけ重く）
+  // 改名・アーカイブ/復帰だけは一度確認を挟む（genba：価格・説明は軽く、危ない操作だけ重く）
   const risky = [];
   if (d.name) risky.push(`名前を「${cur.name}」→「${d.name}」に変えます（ボードの自動紐づけが外れます）`);
-  if (d.is_active === false) risky.push("休売にします（各画面の商品候補から消えます）");
-  if (d.is_active === true) risky.push("販売中に戻します");
+  if (d.is_active === false) risky.push("アーカイブします（もう作らない商品の片付け。各画面の候補から消えます）");
+  if (d.is_active === true) risky.push("現役に戻します");
   if (risky.length && !confirming){
     confirming = true;
     $("s-confirm").style.display = "block";
@@ -212,7 +212,7 @@ async function newProduct(){
 $("search").addEventListener("input", renderList);
 
 if (requireLogin()){
-  // 休売も含めて出す（戻す口はこの画面が唯一・genba指摘）
+  // アーカイブも含めて出す（戻す口はこの画面が唯一・genba指摘）
   rest("products?select=id,display_code,name,category,price_in_tax,description,label_display_name,yield_per_batch,memo,is_active&order=name&limit=500")
     .then((p)=>{ products = p; renderChips(); renderList(); })
     .catch(()=>toast("読み込みエラー"));
