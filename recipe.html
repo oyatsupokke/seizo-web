@@ -57,6 +57,7 @@
     <div class="combo-list" id="t-list"></div>
   </div>
   <div class="r-status" id="r-status" style="display:none"></div>
+  <div style="text-align:right; margin:4px 0"><button type="button" onclick="exportRecipesCsv()" style="background:#f4f1ea; color:#555; border-radius:8px; padding:6px 12px; font-size:.8rem">⬇ 全レシピをCSVで出す</button></div>
 
   <div id="editor" style="display:none">
     <label>材料（検索してタップで追加）</label>
@@ -96,7 +97,7 @@
 </div>
 <div class="toast" id="toast"></div>
 
-<script src="api.js?v=20260824"></script>
+<script src="api.js?v=20260824b"></script>
 <script>
 const DRAFT_KEY = "seizo_recipe_draft";
 let products = [], hanseihin = [], ingredients = [];
@@ -372,6 +373,24 @@ async function doSave(){
 
 let _tid = null;
 async function myTenantId(){ if (!_tid) _tid = (await rpc("fn_my_tenant_id")) || null; return _tid; }
+
+/* ---------- 全レシピのCSV書き出し（1行=1材料。レシピ明細シートと同じ形） ---------- */
+
+async function exportRecipesCsv(){
+  try {
+    const rs = await rest("recipes?is_active=is.true&select=method_memo,products(name,yield_per_batch),ingredients(name),recipe_items(amount_g_per_batch,ingredients(name))&limit=1000");
+    const rows = [["レシピ（商品・生地）","種別","材料名","仕込み1回分g","できあがり個数","製法メモ"]];
+    for (const r of rs){
+      const owner = r.products?.name || r.ingredients?.name || "（不明）";
+      const kind = r.products ? "商品" : "生地・半製品";
+      for (const it of r.recipe_items){
+        rows.push([owner, kind, it.ingredients?.name || "", it.amount_g_per_batch, r.products?.yield_per_batch ?? "", r.method_memo || ""]);
+      }
+    }
+    downloadCsv(`レシピ明細_${todayStr()}.csv`, rows);
+    toast(`CSVを保存しました（${rows.length - 1}行）`);
+  } catch(e){ toast("CSVの作成に失敗しました"); console.error(e); }
+}
 
 /* ---------- 起動 ---------- */
 

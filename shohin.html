@@ -34,6 +34,7 @@
 <main>
   <input type="text" id="search" placeholder="商品名で検索" autocomplete="off">
   <div class="cat-chips" id="cats" style="margin-top:8px"></div>
+  <div style="text-align:right; margin:4px 0"><button type="button" onclick="exportCsv()" style="background:#f4f1ea; color:#555; border-radius:8px; padding:6px 12px; font-size:.8rem">⬇ CSVで出す</button></div>
   <div id="list"><div class="empty">読み込み中…</div></div>
 </main>
 <div class="fab" onclick="newProduct()">🆕 新しい商品</div>
@@ -75,7 +76,7 @@
 </div>
 <div class="toast" id="toast"></div>
 
-<script src="api.js?v=20260824"></script>
+<script src="api.js?v=20260824b"></script>
 <script>
 let products = [], cur = null, curActive = true, selCat = null, confirming = false;
 
@@ -187,6 +188,17 @@ async function save(){
     closeSheet(); renderChips(); renderList();
   } catch(e){ toast("保存に失敗しました"); console.error(e); }
   finally { btn.disabled = false; confirming = false; }
+}
+
+/* ---------- CSV書き出し（全商品・アーカイブ含む） ---------- */
+
+function exportCsv(){
+  const rows = [["商品ID","商品名","カテゴリ","販売価格（税込）","商品説明","表示名（ラベル用）","できあがり個数","メモ","状態"]];
+  for (const p of products){
+    rows.push([p.display_code, p.name, p.category, p.price_in_tax, p.description, p.label_display_name, p.yield_per_batch, p.memo, p.is_active ? "現役" : "アーカイブ"]);
+  }
+  downloadCsv(`商品マスタ_${todayStr()}.csv`, rows);
+  toast(`CSVを保存しました（${products.length}件）`);
 }
 
 /* ---------- 新規（insertはrecipe.htmlと共通のcreateProduct） ---------- */

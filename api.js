@@ -94,6 +94,20 @@ async function createProduct(name) {
   return row;
 }
 
+/* ---------- CSVダウンロード（Excel/スプレッドシート互換：BOM付きUTF-8・CRLF） ---------- */
+function downloadCsv(filename, rows) {
+  const cell = (v) => {
+    const s = String(v ?? "");
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const csv = "\uFEFF" + rows.map((r) => r.map(cell).join(",")).join("\r\n");
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(new Blob([csv], { type: "text/csv" }));
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
 /* ---------- 共通ユーティリティ ---------- */
 
 const $ = (id) => document.getElementById(id);
