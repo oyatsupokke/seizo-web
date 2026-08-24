@@ -96,7 +96,7 @@
 </div>
 <div class="toast" id="toast"></div>
 
-<script src="api.js"></script>
+<script src="api.js?v=20260824"></script>
 <script>
 const DRAFT_KEY = "seizo_recipe_draft";
 let products = [], hanseihin = [], ingredients = [];
@@ -155,7 +155,7 @@ async function createTarget(kind){
   if (!name) return;
   try {
     if (kind === "product"){
-      const [row] = await insert("products", { tenant_id: await myTenantId(), name, is_active: true });
+      const row = await createProduct(name);
       products.push(row);
       toast(`商品「${name}」を登録しました`);
       await pickTarget(row.id, 0);

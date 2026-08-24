@@ -82,6 +82,18 @@ const insert = (table, rows) =>
     body: JSON.stringify(rows),
   });
 
+/* ---------- 商品の新規作成（recipe.html・shohin.htmlの🆕共通） ----------
+ * 初期状態が入口によって割れないよう、商品のinsertは必ずここを通す（genba指摘） */
+let _sharedTid = null;
+async function sharedTenantId() {
+  if (!_sharedTid) _sharedTid = (await rpc("fn_my_tenant_id")) || null;
+  return _sharedTid;
+}
+async function createProduct(name) {
+  const [row] = await insert("products", { tenant_id: await sharedTenantId(), name, is_active: true });
+  return row;
+}
+
 /* ---------- 共通ユーティリティ ---------- */
 
 const $ = (id) => document.getElementById(id);

@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>商品マスタ — 製造管理</title>
+<link rel="stylesheet" href="app.css">
+<style>
+  .p-row{display:flex; align-items:center; gap:8px; background:#fff; border-radius:10px; padding:11px 12px; margin:6px 0; cursor:pointer;}
+  .p-row.inactive{opacity:.55; background:#f3f1ec;}
+  .p-row .nm{flex:1; min-width:0; overflow-wrap:anywhere; font-size:.95rem;}
+  .p-row .cat{flex:0 0 auto; font-size:.72rem; color:#777; background:#f4f1ea; border-radius:6px; padding:2px 7px;}
+  .p-row .price{flex:0 0 auto; font-size:.9rem; font-variant-numeric:tabular-nums;}
+  .badge-noprice{font-size:.72rem; color:#b26a00; background:#fdf3e0; border-radius:6px; padding:2px 7px; font-weight:700;}
+  .badge-kyubai{font-size:.72rem; color:#c62828; background:#fbe9e9; border-radius:6px; padding:2px 7px; font-weight:700;}
+  .sheet label{display:block; margin:12px 0 4px; font-weight:700; font-size:.88rem;}
+  .sheet input[type=text], .sheet input[type=number], .sheet textarea{width:100%; font-size:1rem; padding:10px; border-radius:10px; border:1px solid #ddd; box-sizing:border-box;}
+  .sheet .hint{font-size:.78rem; color:#888; margin-top:3px;}
+  .code-line{font-size:.82rem; color:#888; margin-bottom:4px;}
+  .fold-toggle{background:#f4f1ea; color:#555; border-radius:10px; padding:9px 14px; font-size:.88rem; margin-top:14px; width:100%; text-align:left;}
+  .fold{display:none;}
+  .state-seg{display:flex; gap:8px; margin-top:4px;}
+  .state-seg button{flex:1; padding:10px; border-radius:10px; background:#f4f1ea; color:#555; font-weight:700;}
+  .state-seg button.on-active{background:#eef7ee; color:#2e7d32;}
+  .state-seg button.on-inactive{background:#fbe9e9; color:#c62828;}
+  .confirm-box{background:#fdf6e8; border-radius:10px; padding:10px 12px; font-size:.9rem; margin:10px 0;}
+</style>
+</head>
+<body>
+<header>
+  <h1>商品マスタ</h1>
+  <div class="nav"><a href="index.html">🏠 今日やること</a><a href="recipe.html">📖 レシピ登録</a></div>
+</header>
+<main>
+  <input type="text" id="search" placeholder="商品名で検索" autocomplete="off">
+  <div class="cat-chips" id="cats" style="margin-top:8px"></div>
+  <div id="list"><div class="empty">読み込み中…</div></div>
+</main>
+<div class="fab" onclick="newProduct()">🆕 新しい商品</div>
+
+<div class="sheet-bg" id="sheet-bg" onclick="closeSheet()"></div>
+<div class="sheet" id="sheet">
+  <h2 id="s-title">商品を編集</h2>
+  <div class="code-line" id="s-code"></div>
+  <label>商品名</label>
+  <input type="text" id="s-name">
+  <div class="hint">名前を変えると「今日やることボード」の自動紐づけが外れます。ボード側の名前も同じに直してください（Squareの商品名は変わりません）</div>
+  <label>カテゴリ</label>
+  <div class="cat-chips" id="s-cats"></div>
+  <input type="text" id="s-cat" placeholder="一覧に無ければ入力">
+  <label>販売価格（税込・円）</label>
+  <input type="number" id="s-price" inputmode="numeric" min="0" step="1" placeholder="未設定">
+  <label>商品説明（EC・接客用）</label>
+  <textarea id="s-desc" rows="3"></textarea>
+  <label>販売状況</label>
+  <div class="state-seg">
+    <button type="button" id="s-on" onclick="setActive(true)">販売中</button>
+    <button type="button" id="s-off" onclick="setActive(false)">休売</button>
+  </div>
+  <div class="hint">休売にすると、レシピ登録・製造計画・在庫の商品候補に出なくなります。この画面からいつでも販売中に戻せます</div>
+  <button type="button" class="fold-toggle" onclick="toggleFold()">▸ 詳細（表示名・できあがり個数・メモ）</button>
+  <div class="fold" id="fold">
+    <label>表示名（ラベル用・任意）</label>
+    <input type="text" id="s-label">
+    <label>できあがり個数（仕込み1回分・任意）</label>
+    <input type="number" id="s-yield" inputmode="decimal" min="0" step="any">
+    <label>メモ（内部用・任意）</label>
+    <input type="text" id="s-memo">
+  </div>
+  <div class="confirm-box" id="s-confirm" style="display:none"></div>
+  <div style="display:flex; gap:10px; margin-top:16px">
+    <button style="flex:1; background:#eee" onclick="closeSheet()">もどる</button>
+    <button class="btn-primary" style="flex:2" id="s-save" onclick="save()">保存する</button>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="api.js?v=20260824"></script>
+<script>
+let products = [], cur = null, curActive = true, selCat = null, confirming = false;
+
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),2500); }
+function norm(s){ return (s||"").normalize("NFKC").replace(/[\s　]/g,"").replace(/[ぁ-ゖ]/g,(c)=>String.fromCharCode(c.charCodeAt(0)+0x60)); }
+function yen(n){ return n == null ? "" : "¥" + Number(n).toLocaleString("ja-JP"); }
+
+function catList(){
+  return [...new Set(products.filter(p=>p.category).map(p=>p.category))].sort((a,b)=>a.localeCompare(b,"ja"));
+}
+
+function renderChips(){
+  $("cats").innerHTML =
+    `<button type="button" class="${selCat===null?"selected":""}" onclick="setCat(null)">すべて</button>` +
+    catList().map((c)=>`<button type="button" class="${selCat===c?"selected":""}" onclick="setCat('${esc(c)}')">${esc(c)}</button>`).join("") +
+    `<button type="button" class="${selCat==="_noprice"?"selected":""}" onclick="setCat('_noprice')" style="color:#b26a00">価格未設定</button>`;
+}
+function setCat(c){ selCat = c; renderChips(); renderList(); }
+
+function renderList(){
+  const q = $("search").value.trim();
+  let list = products;
+  if (selCat === "_noprice") list = list.filter((p)=>p.price_in_tax == null && p.is_active);
+  else if (selCat) list = list.filter((p)=>p.category === selCat);
+  if (q) list = list.filter((p)=>p.name.includes(q) || norm(p.name).includes(norm(q)));
+  $("list").innerHTML = list.map((p)=>`
+    <div class="p-row ${p.is_active ? "" : "inactive"}" onclick="openSheet('${p.id}')">
+      <span class="nm">${esc(p.name)}${p.description ? " 📝" : ""}</span>
+      ${p.is_active ? "" : `<span class="badge-kyubai">休売</span>`}
+      ${p.category ? `<span class="cat">${esc(p.category)}</span>` : ""}
+      ${p.price_in_tax != null ? `<span class="price">${yen(p.price_in_tax)}</span>` : (p.is_active ? `<span class="badge-noprice">価格未設定</span>` : "")}
+    </div>`).join("") || `<div class="empty">一致する商品がありません</div>`;
+}
+
+/* ---------- 編集シート ---------- */
+
+function renderSheetCats(){
+  const c = $("s-cat").value.trim();
+  $("s-cats").innerHTML = catList().map((x)=>
+    `<button type="button" class="${x===c?"selected":""}" onclick="$('s-cat').value='${esc(x)}'; renderSheetCats()">${esc(x)}</button>`).join("");
+}
+function setActive(v){
+  curActive = v;
+  $("s-on").className = v ? "on-active" : "";
+  $("s-off").className = v ? "" : "on-inactive";
+}
+function toggleFold(){ const f=$("fold"); f.style.display = f.style.display==="block" ? "none" : "block"; }
+
+function openSheet(id){
+  cur = products.find((p)=>p.id===id);
+  confirming = false;
+  $("s-confirm").style.display = "none";
+  $("s-title").textContent = "商品を編集";
+  $("s-code").textContent = cur.display_code ? `商品ID：${cur.display_code}` : "";
+  $("s-name").value = cur.name;
+  $("s-cat").value = cur.category || "";
+  $("s-price").value = cur.price_in_tax ?? "";
+  $("s-desc").value = cur.description || "";
+  $("s-label").value = cur.label_display_name || "";
+  $("s-yield").value = cur.yield_per_batch ?? "";
+  $("s-memo").value = cur.memo || "";
+  $("fold").style.display = "none";
+  setActive(cur.is_active);
+  renderSheetCats();
+  $("sheet-bg").style.display = "block"; $("sheet").style.display = "block";
+}
+function closeSheet(){ $("sheet-bg").style.display = "none"; $("sheet").style.display = "none"; cur = null; }
+
+function diff(){
+  const d = {};
+  const name = $("s-name").value.trim();
+  if (name && name !== cur.name) d.name = name;
+  const cat = $("s-cat").value.trim() || null;
+  if (cat !== (cur.category || null)) d.category = cat;
+  const price = $("s-price").value === "" ? null : Number($("s-price").value);
+  if (price !== (cur.price_in_tax ?? null)) d.price_in_tax = price;
+  const desc = $("s-desc").value.trim() || null;
+  if (desc !== (cur.description || null)) d.description = desc;
+  const label = $("s-label").value.trim() || null;
+  if (label !== (cur.label_display_name || null)) d.label_display_name = label;
+  const y = $("s-yield").value === "" ? null : Number($("s-yield").value);
+  if (y !== (cur.yield_per_batch ?? null)) d.yield_per_batch = y;
+  const memo = $("s-memo").value.trim() || null;
+  if (memo !== (cur.memo || null)) d.memo = memo;
+  if (curActive !== cur.is_active) d.is_active = curActive;
+  return d;
+}
+
+async function save(){
+  if (!cur) return;
+  const d = diff();
+  if (!Object.keys(d).length){ toast("変更はありません"); closeSheet(); return; }
+  // 改名・休売/再開だけは一度確認を挟む（genba：価格・説明は軽く、危ない操作だけ重く）
+  const risky = [];
+  if (d.name) risky.push(`名前を「${cur.name}」→「${d.name}」に変えます（ボードの自動紐づけが外れます）`);
+  if (d.is_active === false) risky.push("休売にします（各画面の商品候補から消えます）");
+  if (d.is_active === true) risky.push("販売中に戻します");
+  if (risky.length && !confirming){
+    confirming = true;
+    $("s-confirm").style.display = "block";
+    $("s-confirm").innerHTML = risky.map((r)=>`⚠ ${esc(r)}`).join("<br>") + "<br>もう一度「保存する」を押すと確定します";
+    return;
+  }
+  const btn = $("s-save"); btn.disabled = true;
+  try {
+    await apiFetch(`/rest/v1/products?id=eq.${cur.id}`, { method: "PATCH", body: JSON.stringify(d) });
+    Object.assign(cur, d);
+    toast("保存しました");
+    closeSheet(); renderChips(); renderList();
+  } catch(e){ toast("保存に失敗しました"); console.error(e); }
+  finally { btn.disabled = false; confirming = false; }
+}
+
+/* ---------- 新規（insertはrecipe.htmlと共通のcreateProduct） ---------- */
+
+async function newProduct(){
+  const name = prompt("新しい商品の名前");
+  if (!name || !name.trim()) return;
+  const n = name.trim();
+  const dup = products.find((p)=>norm(p.name)===norm(n));
+  if (dup){ toast(`「${dup.name}」が既にあります（一覧から開けます）`); $("search").value = n; renderList(); return; }
+  try {
+    const row = await createProduct(n);
+    products.push(row);
+    products.sort((a,b)=>a.name.localeCompare(b.name,"ja"));
+    renderList();
+    openSheet(row.id);   // 作ったらそのまま価格・カテゴリを入れてもらう
+    toast(`「${n}」を登録しました。価格とカテゴリもどうぞ`);
+  } catch(e){ toast("登録に失敗しました"); console.error(e); }
+}
+
+/* ---------- 起動 ---------- */
+
+$("search").addEventListener("input", renderList);
+
+if (requireLogin()){
+  // 休売も含めて出す（戻す口はこの画面が唯一・genba指摘）
+  rest("products?select=id,display_code,name,category,price_in_tax,description,label_display_name,yield_per_batch,memo,is_active&order=name&limit=500")
+    .then((p)=>{ products = p; renderChips(); renderList(); })
+    .catch(()=>toast("読み込みエラー"));
+}
+</script>
+</body>
+</html>
