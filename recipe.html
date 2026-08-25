@@ -97,7 +97,7 @@
 </div>
 <div class="toast" id="toast"></div>
 
-<script src="api.js?v=20260824b"></script>
+<script src="api.js?v=20260824c"></script>
 <script>
 const DRAFT_KEY = "seizo_recipe_draft";
 let products = [], hanseihin = [], ingredients = [];
@@ -240,9 +240,7 @@ async function addTempIngredient(){
   const name = $("i-search").value.trim();
   if (!name) return;
   try {
-    const [row] = await insert("ingredients", {
-      tenant_id: await myTenantId(), name, category: "未分類", kind: "購入材料", unit: "g", is_active: true,
-    });
+    const row = await createIngredient(name);
     ingredients.push(row);
     toast(`「${name}」を仮登録しました（単価はあとで設定）`);
     addRow(row.id);

@@ -123,7 +123,9 @@ async function renderTempIng() {
     const el = $("temp-ing");
     if (!t.length) { el.style.display = "none"; return; }
     el.style.display = "block";
-    el.textContent = `⚠ 単価未設定の材料 ${t.length}件（レシピ画面で仮登録）：${t.map((x) => x.name).join("・")} — 原価に乗らないので設定が必要です`;
+    el.style.cursor = "pointer";
+    el.onclick = () => location.href = "zairyo.html?filter=noprice";
+    el.textContent = `⚠ 単価未設定の材料 ${t.length}件（レシピ画面で仮登録）：${t.map((x) => x.name).join("・")} — タップして材料マスタで設定`;
   } catch {}
 }
 

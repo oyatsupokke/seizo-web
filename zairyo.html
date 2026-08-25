@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>材料マスタ — 製造管理</title>
+<link rel="stylesheet" href="app.css">
+<style>
+  .p-row{display:flex; align-items:center; gap:8px; background:#fff; border-radius:10px; padding:11px 12px; margin:6px 0; cursor:pointer;}
+  .p-row.inactive{opacity:.55; background:#f3f1ec;}
+  .p-row .nm{flex:1; min-width:0; overflow-wrap:anywhere; font-size:.95rem;}
+  .p-row .nm .kiji{color:#5b3fa8; font-weight:700;}
+  .p-row .cat{flex:0 0 auto; font-size:.72rem; color:#777; background:#f4f1ea; border-radius:6px; padding:2px 7px;}
+  .p-row .price{flex:0 0 auto; font-size:.85rem; font-variant-numeric:tabular-nums; color:#444;}
+  .badge-noprice{font-size:.72rem; color:#b26a00; background:#fdf3e0; border-radius:6px; padding:2px 7px; font-weight:700;}
+  .badge-kyubai{font-size:.72rem; color:#c62828; background:#fbe9e9; border-radius:6px; padding:2px 7px; font-weight:700;}
+  .sheet label{display:block; margin:12px 0 4px; font-weight:700; font-size:.88rem;}
+  .sheet input[type=text], .sheet input[type=number]{width:100%; font-size:1rem; padding:10px; border-radius:10px; border:1px solid #ddd; box-sizing:border-box;}
+  .sheet .hint{font-size:.78rem; color:#888; margin-top:3px;}
+  .fold-toggle{background:#f4f1ea; color:#555; border-radius:10px; padding:9px 14px; font-size:.88rem; margin-top:14px; width:100%; text-align:left;}
+  .fold{display:none;}
+  .state-seg{display:flex; gap:8px; margin-top:4px;}
+  .state-seg button{flex:1; padding:10px; border-radius:10px; background:#f4f1ea; color:#555; font-weight:700;}
+  .state-seg button.on-active{background:#eef7ee; color:#2e7d32;}
+  .state-seg button.on-inactive{background:#fbe9e9; color:#c62828;}
+  .tax-seg{display:flex; gap:8px; margin-top:6px; align-items:center;}
+  .tax-seg button{flex:0 0 auto; padding:8px 14px; border-radius:10px; background:#f4f1ea; color:#555; font-weight:700; font-size:.85rem;}
+  .tax-seg button.selected{background:var(--c-shikomi); color:#fff;}
+  .tax-seg .extax{flex:1; text-align:right; font-size:.85rem; color:#666;}
+  .confirm-box{background:#fdf6e8; border-radius:10px; padding:10px 12px; font-size:.9rem; margin:10px 0;}
+  .ro-line{background:#f4f0fa; border-radius:10px; padding:10px 12px; font-size:.88rem; margin-top:12px;}
+</style>
+</head>
+<body>
+<header>
+  <h1>材料マスタ</h1>
+  <div class="nav"><a href="index.html">🏠 今日やること</a><a href="shohin.html">🏷 商品マスタ</a><a href="recipe.html">📖 レシピ登録</a></div>
+</header>
+<main>
+  <input type="text" id="search" placeholder="材料名で検索" autocomplete="off">
+  <div class="cat-chips" id="cats" style="margin-top:8px"></div>
+  <div style="text-align:right; margin:4px 0"><button type="button" onclick="exportCsvZ()" style="background:#f4f1ea; color:#555; border-radius:8px; padding:6px 12px; font-size:.8rem">⬇ CSVで出す</button></div>
+  <div id="list"><div class="empty">読み込み中…</div></div>
+</main>
+<div class="fab" onclick="newIngredient()">🆕 新しい材料</div>
+
+<div class="sheet-bg" id="sheet-bg" onclick="closeSheet()"></div>
+<div class="sheet" id="sheet">
+  <h2 id="s-title">材料を編集</h2>
+  <label>材料名</label>
+  <input type="text" id="s-name">
+  <div class="hint" id="s-name-hint"></div>
+  <label>カテゴリ</label>
+  <div class="cat-chips" id="s-cats"></div>
+  <input type="text" id="s-cat" placeholder="一覧に無ければ入力">
+  <div id="buy-fields">
+    <label>容量（1袋・1缶の中身g）</label>
+    <input type="number" id="s-size" inputmode="decimal" min="0" step="any" placeholder="未設定">
+    <label>税込単価（円・1袋あたり）</label>
+    <input type="number" id="s-price" inputmode="decimal" min="0" step="any" placeholder="未設定">
+    <div class="tax-seg">
+      <button type="button" id="tax8" onclick="setTax(8)">8%（食品）</button>
+      <button type="button" id="tax10" onclick="setTax(10)">10%</button>
+      <span class="extax" id="s-extax"></span>
+    </div>
+    <button type="button" class="fold-toggle" onclick="toggleFold()">▸ 発注まわり（発注単位・発注点・リードタイム）</button>
+    <div class="fold" id="fold">
+      <label>発注単位の名前（袋・本・缶など）</label>
+      <input type="text" id="s-ounit" placeholder="例：袋">
+      <label>発注単位1つ＝何g</label>
+      <input type="number" id="s-ounitg" inputmode="decimal" min="0" step="any" placeholder="容量と同じなら空欄でOK">
+      <div class="hint">空欄のまま保存すると容量gと同じ値が入ります</div>
+      <label>発注点g（これを下回ったらアラート・見張りたい材料だけ）</label>
+      <input type="number" id="s-rop" inputmode="decimal" min="0" step="any" placeholder="未設定＝アラート対象外">
+      <label>リードタイム日数（発注→入荷）</label>
+      <input type="number" id="s-lead" inputmode="numeric" min="0" step="1" placeholder="例：3">
+    </div>
+  </div>
+  <div class="ro-line" id="hansei-info" style="display:none"></div>
+  <label>この材料</label>
+  <div class="state-seg">
+    <button type="button" id="s-on" onclick="setActive(true)">現役</button>
+    <button type="button" id="s-off" onclick="setActive(false)">アーカイブ（廃番）</button>
+  </div>
+  <div class="hint">アーカイブは仕入先の廃番・代替切替のときの片付け用。レシピの材料行からは消えませんが、新しいレシピで選べなくなり、発注アラートからも外れます</div>
+  <div class="confirm-box" id="s-confirm" style="display:none"></div>
+  <div style="display:flex; gap:10px; margin-top:16px">
+    <button style="flex:1; background:#eee" onclick="closeSheet()">もどる</button>
+    <button class="btn-primary" style="flex:2" id="s-save" onclick="save()">保存する</button>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="api.js?v=20260824c"></script>
+<script>
+let items = [], cur = null, curActive = true, curTax = 8, selCat = null, confirming = false;
+
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),2500); }
+function norm(s){ return (s||"").normalize("NFKC").replace(/[\s　]/g,"").replace(/[ぁ-ゖ]/g,(c)=>String.fromCharCode(c.charCodeAt(0)+0x60)); }
+function yen(n){ return n == null ? "" : "¥" + Number(n).toLocaleString("ja-JP", {maximumFractionDigits:1}); }
+const isBuy = (i) => i.kind === "購入材料";
+
+function catList(){
+  return [...new Set(items.filter(i=>i.category).map(i=>i.category))].sort((a,b)=>a.localeCompare(b,"ja"));
+}
+function renderChips(){
+  $("cats").innerHTML =
+    `<button type="button" class="${selCat===null?"selected":""}" onclick="setCat(null)">すべて</button>` +
+    catList().map((c)=>`<button type="button" class="${selCat===c?"selected":""}" onclick="setCat('${esc(c)}')">${esc(c)}</button>`).join("") +
+    `<button type="button" class="${selCat==="_noprice"?"selected":""}" onclick="setCat('_noprice')" style="color:#b26a00">単価未設定</button>`;
+}
+function setCat(c){ selCat = c; renderChips(); renderList(); }
+
+function label(i){
+  if (!isBuy(i)) return i.category === "生地" ? `<span class="kiji">生地｜</span>${esc(i.name.replace(/生地$/,""))}` : `${esc(i.name)}〔半製品〕`;
+  return esc(i.name);
+}
+function priceText(i){
+  if (!isBuy(i)) return "";
+  if (i.unit_price_in_tax == null) return i.is_active ? `<span class="badge-noprice">単価未設定</span>` : "";
+  return `<span class="price">${yen(i.unit_price_in_tax)}${i.package_size_g ? `／${Number(i.package_size_g)}g` : ""}</span>`;
+}
+function renderList(){
+  const q = $("search").value.trim();
+  let list = items;
+  if (selCat === "_noprice") list = list.filter((i)=>isBuy(i) && i.unit_price_in_tax == null && i.is_active);
+  else if (selCat) list = list.filter((i)=>i.category === selCat);
+  if (q) list = list.filter((i)=>i.name.includes(q) || norm(i.name).includes(norm(q)));
+  $("list").innerHTML = list.slice(0, 200).map((i)=>`
+    <div class="p-row ${i.is_active ? "" : "inactive"}" onclick="openSheet('${i.id}')">
+      <span class="nm">${label(i)}</span>
+      ${i.is_active ? "" : `<span class="badge-kyubai">アーカイブ</span>`}
+      ${i.category ? `<span class="cat">${esc(i.category)}</span>` : ""}
+      ${priceText(i)}
+    </div>`).join("") || `<div class="empty">一致する材料がありません</div>`;
+}
+
+/* ---------- 編集シート ---------- */
+
+function renderSheetCats(){
+  const c = $("s-cat").value.trim();
+  $("s-cats").innerHTML = catList().filter(x=>x!=="生地"||!isBuy(cur)).map((x)=>
+    `<button type="button" class="${x===c?"selected":""}" onclick="$('s-cat').value='${esc(x)}'; renderSheetCats()">${esc(x)}</button>`).join("");
+}
+function setActive(v){
+  curActive = v;
+  $("s-on").className = v ? "on-active" : "";
+  $("s-off").className = v ? "" : "on-inactive";
+}
+function setTax(r){
+  curTax = r;
+  $("tax8").classList.toggle("selected", r===8);
+  $("tax10").classList.toggle("selected", r===10);
+  renderExTax();
+}
+function renderExTax(){
+  const p = $("s-price").value === "" ? null : Number($("s-price").value);
+  $("s-extax").textContent = p != null ? `税抜 ${yen(p / (1 + curTax/100))}（自動計算）` : "";
+}
+function toggleFold(){
+  const f = $("fold");
+  f.style.display = f.style.display==="block" ? "none" : "block";
+  // 二重入力の迷い防止（genba）：発注単位gが空なら容量gを初期値に
+  if (f.style.display==="block" && !$("s-ounitg").value && $("s-size").value) $("s-ounitg").value = $("s-size").value;
+}
+
+function openSheet(id){
+  cur = items.find((i)=>i.id===id);
+  confirming = false;
+  $("s-confirm").style.display = "none";
+  $("s-name").value = cur.name;
+  $("s-name-hint").textContent = isBuy(cur)
+    ? "レシピとはIDで繋がっているので改名OK（全画面の表示が変わるだけ）"
+    : "⚠ 生地・半製品の改名は「今日やることボード」の自動紐づけが外れます。ボード側の名前も同じに直してください";
+  $("s-cat").value = cur.category || "";
+  $("buy-fields").style.display = isBuy(cur) ? "block" : "none";
+  $("hansei-info").style.display = isBuy(cur) ? "none" : "block";
+  if (isBuy(cur)){
+    $("s-size").value = cur.package_size_g ?? "";
+    $("s-price").value = cur.unit_price_in_tax ?? "";
+    $("s-ounit").value = cur.order_unit || "";
+    $("s-ounitg").value = cur.order_unit_to_g ?? "";
+    $("s-rop").value = cur.reorder_point ?? "";
+    $("s-lead").value = cur.lead_time_days ?? "";
+    // 税率の推定：両方の単価があれば比率から、なければ酒だけ10%
+    let rate = 8;
+    if (cur.unit_price_in_tax && cur.unit_price_ex_tax){
+      rate = Math.abs(cur.unit_price_in_tax / cur.unit_price_ex_tax - 1.10) < 0.005 ? 10 : 8;
+    } else if (cur.category === "酒") rate = 10;
+    setTax(rate);
+  } else {
+    $("hansei-info").textContent = cur.package_size_g
+      ? `1バッチ出来上がり ${Number(cur.package_size_g)}g（レシピの材料合計から自動計算・レシピ画面で変わります）`
+      : "1バッチ出来上がりg：未設定（レシピを保存すると自動で入ります）";
+  }
+  $("fold").style.display = "none";
+  setActive(cur.is_active);
+  renderSheetCats();
+  $("sheet-bg").style.display = "block"; $("sheet").style.display = "block";
+}
+function closeSheet(){ $("sheet-bg").style.display = "none"; $("sheet").style.display = "none"; cur = null; }
+
+function numOrNull(id){ const v = $(id).value; return v === "" ? null : Number(v); }
+
+function diff(){
+  const d = {};
+  const name = $("s-name").value.trim();
+  if (name && name !== cur.name) d.name = name;
+  const cat = $("s-cat").value.trim() || null;
+  if (cat !== (cur.category || null)) d.category = cat;
+  if (isBuy(cur)){
+    const size = numOrNull("s-size");
+    if (size !== (cur.package_size_g ?? null)) d.package_size_g = size;
+    const price = numOrNull("s-price");
+    if (price !== (cur.unit_price_in_tax ?? null)){
+      d.unit_price_in_tax = price;
+      d.unit_price_ex_tax = price != null ? Math.round(price / (1 + curTax/100) * 100) / 100 : null;
+    } else if (price != null){
+      // 単価は同じでも税率だけ変えた場合
+      const ex = Math.round(price / (1 + curTax/100) * 100) / 100;
+      if (ex !== (cur.unit_price_ex_tax ?? null)) d.unit_price_ex_tax = ex;
+    }
+    const ou = $("s-ounit").value.trim() || null;
+    if (ou !== (cur.order_unit || null)) d.order_unit = ou;
+    let oug = numOrNull("s-ounitg");
+    if (oug == null && ou && (d.package_size_g ?? cur.package_size_g)) oug = Number(d.package_size_g ?? cur.package_size_g);
+    if (oug !== (cur.order_unit_to_g ?? null)) d.order_unit_to_g = oug;
+    const rop = numOrNull("s-rop");
+    if (rop !== (cur.reorder_point ?? null)) d.reorder_point = rop;
+    const lead = numOrNull("s-lead");
+    if (lead !== (cur.lead_time_days ?? null)) d.lead_time_days = lead;
+  }
+  if (curActive !== cur.is_active) d.is_active = curActive;
+  return d;
+}
+
+async function save(){
+  if (!cur) return;
+  const d = diff();
+  if (!Object.keys(d).length){ toast("変更はありません"); closeSheet(); return; }
+  const risky = [];
+  if (d.name) risky.push(`名前を「${cur.name}」→「${d.name}」に変えます${isBuy(cur) ? "" : "（⚠ボードの自動紐づけが外れます）"}`);
+  if (d.is_active === false) risky.push("__ARCHIVE__");
+  if (d.is_active === true) risky.push("現役に戻します");
+  if (risky.length && !confirming){
+    confirming = true;
+    let html = [];
+    for (const r of risky){
+      if (r === "__ARCHIVE__"){
+        // 使用中レシピを名前つきで見せる（genba：件数だけだと結局調べに行く）
+        let used = [];
+        try {
+          const rs = await rest(`recipe_items?ingredient_id=eq.${cur.id}&select=recipes!inner(is_active,products(name),ingredients(name))&recipes.is_active=is.true&limit=50`);
+          used = [...new Set(rs.map((x)=>x.recipes.products?.name || x.recipes.ingredients?.name).filter(Boolean))];
+        } catch {}
+        html.push(used.length
+          ? `⚠ アーカイブします。この材料は<b>${used.length}本のレシピ</b>で使われています：${used.slice(0,3).map(esc).join("・")}${used.length>3 ? ` 他${used.length-3}本` : ""}`
+          : "⚠ アーカイブします（使用中のレシピはありません）");
+      } else html.push(`⚠ ${esc(r)}`);
+    }
+    $("s-confirm").style.display = "block";
+    $("s-confirm").innerHTML = html.join("<br>") + "<br>もう一度「保存する」を押すと確定します";
+    return;
+  }
+  const btn = $("s-save"); btn.disabled = true;
+  try {
+    await apiFetch(`/rest/v1/ingredients?id=eq.${cur.id}`, { method: "PATCH", body: JSON.stringify(d) });
+    Object.assign(cur, d);
+    toast("保存しました");
+    closeSheet(); renderChips(); renderList();
+  } catch(e){ toast("保存に失敗しました"); console.error(e); }
+  finally { btn.disabled = false; confirming = false; }
+}
+
+/* ---------- 新規・CSV ---------- */
+
+async function newIngredient(){
+  const name = prompt("新しい材料の名前");
+  if (!name || !name.trim()) return;
+  const n = name.trim();
+  const dup = items.find((i)=>norm(i.name)===norm(n));
+  if (dup){ toast(`「${dup.name}」が既にあります（一覧から開けます）`); $("search").value = n; renderList(); return; }
+  try {
+    const row = await createIngredient(n);
+    items.push(row);
+    items.sort((a,b)=>a.name.localeCompare(b.name,"ja"));
+    renderList();
+    openSheet(row.id);
+    toast(`「${n}」を登録しました。容量と単価もどうぞ`);
+  } catch(e){ toast("登録に失敗しました"); console.error(e); }
+}
+
+function exportCsvZ(){
+  const rows = [["材料ID","材料名","カテゴリ","種別","容量g","税込単価","税抜単価","発注単位","発注単位g","発注点g","リードタイム日","状態"]];
+  for (const i of items){
+    rows.push([i.display_code, i.name, i.category, i.kind, i.package_size_g, i.unit_price_in_tax, i.unit_price_ex_tax, i.order_unit, i.order_unit_to_g, i.reorder_point, i.lead_time_days, i.is_active ? "現役" : "アーカイブ"]);
+  }
+  downloadCsv(`材料マスタ_${todayStr()}.csv`, rows);
+  toast(`CSVを保存しました（${items.length}件）`);
+}
+
+/* ---------- 起動 ---------- */
+
+$("search").addEventListener("input", renderList);
+$("s-price").addEventListener("input", renderExTax);
+
+if (requireLogin()){
+  rest("ingredients?select=id,display_code,name,category,kind,package_size_g,unit_price_in_tax,unit_price_ex_tax,order_unit,order_unit_to_g,reorder_point,lead_time_days,is_active&order=name&limit=500")
+    .then((rows)=>{
+      items = rows;
+      // zaiko.htmlの「単価未設定」バッジからの直リンク
+      if (new URLSearchParams(location.search).get("filter") === "noprice") selCat = "_noprice";
+      renderChips(); renderList();
+    })
+    .catch(()=>toast("読み込みエラー"));
+}
+</script>
+</body>
+</html>

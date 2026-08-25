@@ -93,6 +93,13 @@ async function createProduct(name) {
   const [row] = await insert("products", { tenant_id: await sharedTenantId(), name, is_active: true });
   return row;
 }
+/* 材料の新規作成（recipe.htmlの仮登録・zairyo.htmlの🆕共通。初期状態を割らない） */
+async function createIngredient(name) {
+  const [row] = await insert("ingredients", {
+    tenant_id: await sharedTenantId(), name, category: "未分類", kind: "購入材料", unit: "g", is_active: true,
+  });
+  return row;
+}
 
 /* ---------- CSVダウンロード（Excel/スプレッドシート互換：BOM付きUTF-8・CRLF） ---------- */
 function downloadCsv(filename, rows) {
