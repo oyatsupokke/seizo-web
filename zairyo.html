@@ -77,6 +77,13 @@
     </div>
   </div>
   <div class="ro-line" id="hansei-info" style="display:none"></div>
+  <div id="hansei-fields" style="display:none">
+    <label>数え方（本・台・枚など）</label>
+    <input type="text" id="s-hunit" placeholder="例：本">
+    <label>1本（1台）＝何g</label>
+    <input type="number" id="s-hunitg" inputmode="decimal" min="0" step="any" placeholder="仕込み完了で本数を入れると自動で覚えます">
+    <div class="hint">在庫・棚卸を「本」で数えるための換算。仕込みタスクの本数入力で自動学習されるので、ふつうは空欄のままでOK</div>
+  </div>
   <label>この材料</label>
   <div class="state-seg">
     <button type="button" id="s-on" onclick="setActive(true)">現役</button>
@@ -192,7 +199,10 @@ function openSheet(id){
     $("hansei-info").textContent = cur.package_size_g
       ? `1バッチ出来上がり ${Number(cur.package_size_g)}g（レシピの材料合計から自動計算・レシピ画面で変わります）`
       : "1バッチ出来上がりg：未設定（レシピを保存すると自動で入ります）";
+    $("s-hunit").value = cur.order_unit || "";
+    $("s-hunitg").value = cur.order_unit_to_g ?? "";
   }
+  $("hansei-fields").style.display = isBuy(cur) ? "none" : "block";
   $("fold").style.display = "none";
   setActive(cur.is_active);
   renderSheetCats();
@@ -229,6 +239,11 @@ function diff(){
     if (rop !== (cur.reorder_point ?? null)) d.reorder_point = rop;
     const lead = numOrNull("s-lead");
     if (lead !== (cur.lead_time_days ?? null)) d.lead_time_days = lead;
+  } else {
+    const hu = $("s-hunit").value.trim() || null;
+    if (hu !== (cur.order_unit || null)) d.order_unit = hu;
+    const hug = numOrNull("s-hunitg");
+    if (hug !== (cur.order_unit_to_g ?? null)) d.order_unit_to_g = hug;
   }
   if (curActive !== cur.is_active) d.is_active = curActive;
   return d;

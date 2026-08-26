@@ -51,6 +51,16 @@
   <h2>担当者</h2>
   <div class="grid" id="member-grid"></div>
 </div>
+<div class="sheet" id="sheet-dough">
+  <h2 id="dough-title">何本できましたか？</h2>
+  <input type="number" id="dough-qty" inputmode="decimal" min="0.5" step="0.5"
+    style="width:100%; font-size:1.3rem; padding:12px; border-radius:10px; border:1px solid #ddd; box-sizing:border-box;">
+  <div class="detail" id="dough-hint" style="margin-top:6px;"></div>
+  <div style="display:flex; gap:10px; margin-top:14px">
+    <button style="flex:1; background:#eee;" onclick="closeSheets()">あとで</button>
+    <button class="btn-finish" style="flex:2;" onclick="saveDoughQty()">記録する</button>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
 <script src="api.js"></script>
@@ -66,14 +76,80 @@ function toast(msg) {
 }
 
 async function load() {
-  const [t, m, al] = await Promise.all([
+  const [t, m, al, hi] = await Promise.all([
     rest("v_today_tasks?select=*"),
     rest("members?select=id,display_name&is_active=eq.true&order=sort_order"),
     rest("v_order_alerts?alert_kind=eq.不足&kind=eq.購入材料&select=name,runout_date&order=runout_date").catch(() => []),
+    rest("ingredients?kind=eq.半製品&select=id,name,category,order_unit,order_unit_to_g,package_size_g").catch(() => []),
   ]);
   tasks = t; members = m;
+  hanseiInfo = Object.fromEntries(hi.map((x) => [x.id, x]));
+  // 焼成タスクの「使った本数」用：商品→生地の対応（初回だけ）
+  if (!Object.keys(doughOfProduct).length) {
+    const doughIds = hi.filter((x) => x.category === "生地").map((x) => x.id);
+    if (doughIds.length) {
+      const rows = await rest(`recipe_items?ingredient_id=in.(${doughIds.join(",")})&select=ingredient_id,recipes!inner(product_id,is_active)&recipes.is_active=is.true`).catch(() => []);
+      for (const r of rows) if (r.recipes?.product_id) doughOfProduct[r.recipes.product_id] = r.ingredient_id;
+    }
+  }
   renderAlertBand(al);
   render();
+}
+
+/* ---------- 冷凍生地の「本」記録（仕込み=できた本数／焼成=使った本数。完了は1タップのまま後追い） ---------- */
+
+let hanseiInfo = {}, doughOfProduct = {}, doughTarget = null;
+
+function doughTaskInfo(t) {
+  if (t.task_category !== "仕込み" || t.status !== "完了") return null;
+  // 生地の仕込み（カスタード等の生地以外の半製品はg管理のまま＝聞かない）
+  if (t.ingredient_id) {
+    const d = hanseiInfo[t.ingredient_id];
+    if (d && d.category === "生地" && Number(d.package_size_g) > 0) return { kind: "make", dough: d };
+    return null;
+  }
+  // 焼成（生地を使う商品タスク）：1本gが未設定のうちは聞かない（換算できないため）
+  if (t.product_id && doughOfProduct[t.product_id]) {
+    const d = hanseiInfo[doughOfProduct[t.product_id]];
+    if (d && (Number(d.order_unit_to_g) > 0 || t.dough_qty != null)) return { kind: "use", dough: d };
+  }
+  return null;
+}
+
+function openDoughQty(id) {
+  const t = findT(id);
+  const dt = doughTaskInfo(t);
+  if (!dt) return;
+  doughTarget = id;
+  const u = dt.dough.order_unit || "本";
+  $("dough-title").textContent = dt.kind === "make"
+    ? `${t.item_name || ""}：何${u}できましたか？`
+    : `${dt.dough.name}を何${u}使いましたか？`;
+  const inp = $("dough-qty");
+  inp.value = t.dough_qty ?? "";
+  let ph = dt.kind === "make" ? `できた${u}数` : `使った${u}数`;
+  if (dt.kind === "make" && Number(dt.dough.order_unit_to_g) > 0) {
+    const est = (Number(dt.dough.package_size_g) * Number(t.batch_count || 1)) / Number(dt.dough.order_unit_to_g);
+    ph = `ふだんなら およそ${Math.round(est * 2) / 2}${u}`;
+  }
+  inp.placeholder = ph;
+  $("dough-hint").textContent = `使いかけは0.5${u}でOK。あとからでも（🧊をタップ）入れられます`;
+  show("sheet-dough");
+  setTimeout(() => inp.focus(), 150);
+}
+
+async function saveDoughQty() {
+  const t = findT(doughTarget);
+  const v = Number($("dough-qty").value);
+  if (!v || v <= 0) { toast("数を入れてください"); return; }
+  try {
+    const r = await rpc("fn_adjust_dough_qty", { p_plan_id: doughTarget, p_qty: v });
+    if (t) t.dough_qty = v;
+    closeSheets(); render();
+    toast(r.learned
+      ? `${v}${r.unit_name}ですね。1${r.unit_name} 約${Math.round(r.unit_g)}g と覚えました`
+      : "記録しました");
+  } catch (e) { toast("記録に失敗しました：" + (e.message || "").slice(0, 60)); console.error(e); }
 }
 
 /* 不足アラートの赤帯（初回棚卸の確定まではビュー側で0件＝非表示） */
@@ -173,7 +249,14 @@ function cardHtml(t) {
     } else {
       const qty = t.completed_quantity != null ? `できあがり ${Number(t.completed_quantity)}個` : "できあがり 予定どおり";
       const qtyChip = t.task_category === "仕込み" && !t.ingredient_id ? `<span class="qty-chip" onclick="editQty('${t.id}')">${qty}</span>` : "";
-      row = `<div class="row">${qtyChip}
+      // 冷凍生地の本数チップ（仕込み=できた本数／焼成=使った本数。未入力は促し表示）
+      const dt = doughTaskInfo(t);
+      const doughChip = dt
+        ? `<span class="qty-chip" onclick="openDoughQty('${t.id}')">🧊 ${t.dough_qty != null
+            ? `${Number(t.dough_qty)}${esc(dt.dough.order_unit || "本")}`
+            : (dt.kind === "make" ? "何本できた？" : "何本使った？")}</span>`
+        : "";
+      row = `<div class="row">${doughChip}${qtyChip}
         <span class="chip ${t.member_id ? "setted" : ""}" onclick="openMember('${t.id}')">担当：${esc(t.member_name || "—")}</span>
         <button class="btn-revert" onclick="doRevert('${t.id}')">戻す</button></div>`;
     }
@@ -269,11 +352,14 @@ function doStart(id) {
     const t = findT(id); t.status = "仕込中"; t.actual_start = new Date().toISOString();
   });
 }
-function doFinish(id) {
-  act("fn_finish_plan", { p_plan_id: id }, () => {
+async function doFinish(id) {
+  // 完了は従来どおり1タップで先に成立（理論値で在庫が動く）。本数はその後の後追い（genba）
+  await act("fn_finish_plan", { p_plan_id: id }, () => {
     const t = findT(id); t.status = "完了";
     t.actual_minutes = Math.max(1, elapsedMin(t));
   });
+  const t = findT(id);
+  if (t && t.status === "完了" && doughTaskInfo(t)) openDoughQty(id);
 }
 function doRevert(id) {
   act("fn_revert_plan", { p_plan_id: id }, () => {
