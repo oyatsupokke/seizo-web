@@ -27,11 +27,12 @@
 
   <div id="uncovered"></div>
 </main>
-<div class="fab" onclick="openArrivalSheet()">📦 入荷を記録</div>
+<div class="fab" onclick="openArrivalSheet()">⚡ 臨時の入荷を記録</div>
 
 <div class="sheet-bg" id="sheetbg" onclick="closeSheets()"></div>
 <div class="sheet" id="sheet-arrival-pick">
-  <h2>何が入荷した？（連続で記録できます）</h2>
+  <h2>臨時の入荷：何が届いた？</h2>
+  <div class="hint">発注したものは、この画面を閉じて「発注済み」一覧の「✔ 届いた」で記録してください（ここは「発注を記録」していない分だけ）</div>
   <div id="arrival-today"></div>
   <input type="text" id="arrival-search" placeholder="材料名で検索" oninput="renderArrivalList()">
   <div class="grid" id="arrival-grid" style="margin-top:10px;"></div>
@@ -419,9 +420,14 @@ function pickIngredient(id) {
   input.value = lastG != null
     ? (useUnit ? Math.round((lastG / pendingIng.order_unit_to_g) * 10) / 10 : Math.round(lastG))
     : "";
-  $("arrival-hint").textContent = lastG != null
+  const baseHint = lastG != null
     ? `前回の入荷と同じ量を入れてあります（前回 ${fmtAmount(pendingIng, lastG)}）`
     : (useUnit ? `1${pendingIng.order_unit} = ${pendingIng.order_unit_to_g}g` : "グラムで入力してください");
+  // 発注済みが残っている材料の臨時入荷は二重計上のもと。止めはしないが気づける表示にする
+  const hasOpenPO = openPOs.some((p) => p.ingredient_id === id);
+  $("arrival-hint").innerHTML = (hasOpenPO
+    ? '<div style="color:#b26a00; font-weight:700; margin-bottom:4px;">⚠ この材料は「発注済み」に残っています。発注した分なら、この画面を閉じて「✔ 届いた」で記録してください（ここで入れると二重になります）</div>'
+    : "") + esc(baseHint);
   hide("sheet-arrival-pick");
   show("sheet-arrival-qty");
   input.focus();
