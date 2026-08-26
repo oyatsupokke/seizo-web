@@ -501,7 +501,7 @@ async function pickOther() {
 function show(id) { $("sheetbg").style.display = "block"; $(id).style.display = "block"; }
 function hide(id) { $(id).style.display = "none"; }
 function closeSheets() {
-  for (const id of ["sheet-product", "sheet-work", "sheet-batch", "sheet-member", "sheet-recipe"]) hide(id);
+  for (const id of ["sheet-product", "sheet-work", "sheet-batch", "sheet-member", "sheet-recipe", "sheet-dough"]) hide(id);
   $("sheetbg").style.display = "none";
   batchEditTarget = null;
 }

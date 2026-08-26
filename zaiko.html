@@ -84,6 +84,7 @@ async function toastUndo() {
 
 let openPOs = [];        // 発注済み・未入荷
 let lastOrder = {};      // ingredient_id -> {qty, unit}（発注数量のデフォルト用）
+let busyPOs = new Set(); // 二度押し防止。DB側も冪等なので通信再送でも二重入荷しない
 
 async function load() {
   const [a, s, units, la, un, pos, recentPos] = await Promise.all([
@@ -107,8 +108,11 @@ async function load() {
   lastArrival = Object.fromEntries(la.map((x) => [x.ingredient_id, { g: x.last_amount_g, at: x.occurred_at }]));
   if (!myTenantId) myTenantId = await rpc("fn_my_tenant_id");
   // 今日記録済みの入荷（リロードしても取消・✔表示が続くように）
-  todayArrivals = (await rest(`inventory_transactions?kind=eq.入荷&occurred_at=gte.${todayStr()}&select=id,ingredient_id,delta_g&order=occurred_at.desc`))
-    .map((t) => ({ id: t.id, ingredient_id: t.ingredient_id, grams: t.delta_g }));
+  todayArrivals = (await rest(`inventory_transactions?kind=eq.入荷&occurred_at=gte.${todayStr()}&select=id,ingredient_id,delta_g,source_purchase_order_id&order=occurred_at.desc`))
+    .map((t) => ({
+      id: t.id, ingredient_id: t.ingredient_id, grams: t.delta_g,
+      purchaseOrderId: t.source_purchase_order_id,
+    }));
   renderPOs();
   renderAlerts();
   renderSearch();
@@ -146,7 +150,7 @@ function renderPOs() {
           <div class="alert-name">${esc(ing?.name || "？")} ${qty}</div>
           <div class="alert-sub">${po.ordered_on ? mmdd(po.ordered_on) + "発注" : ""}${stale ? "・<b>届いていませんか？</b>" : ""}（数量が違えばタップで修正）</div>
         </div>
-        <button class="btn-arrive" onclick="poArrived('${po.id}')">✔ 届いた</button>
+        <button class="btn-arrive" onclick="poArrived('${po.id}')" ${busyPOs.has(po.id) ? "disabled" : ""}>${busyPOs.has(po.id) ? "反映中…" : "✔ 届いた"}</button>
         <button class="btn-revert" onclick="poCancel('${po.id}')">取消</button>
       </div>`;
     }).join("");
@@ -160,22 +164,31 @@ function poGrams(po, ing) {
 
 async function poArrived(poId) {
   const po = openPOs.find((p) => p.id === poId);
-  if (!po) return;
+  if (!po || busyPOs.has(poId)) return;
   const ing = ingOf(po.ingredient_id);
-  const grams = poGrams(po, ing);
+  busyPOs.add(poId);
+  renderPOs();
   try {
-    const rows = await insert("inventory_transactions", [{
-      tenant_id: myTenantId, ingredient_id: po.ingredient_id, delta_g: grams, kind: "入荷",
-    }]);
-    const txId = rows[0].id;
-    await apiFetch(`/rest/v1/purchase_orders?id=eq.${poId}`, { method: "PATCH", body: JSON.stringify({ status: "入荷済" }) });
-    toast(`${ing?.name || ""} ${fmtAmount(ing, grams)} 入荷を記録しました`, async () => {
-      await apiFetch(`/rest/v1/inventory_transactions?id=eq.${txId}`, { method: "DELETE" });
-      await apiFetch(`/rest/v1/purchase_orders?id=eq.${poId}`, { method: "PATCH", body: JSON.stringify({ status: "発注済" }) });
-      load().catch(() => {});
+    const result = await rpc("fn_receive_purchase_order", { p_purchase_order_id: poId });
+    toast(`${ing?.name || ""} ${fmtAmount(ing, result.amount_g)} 入荷を記録しました`, async () => {
+      if (!confirm("この入荷記録を取り消しますか？\n在庫も入荷前の量に戻ります。")) return;
+      try {
+        await rpc("fn_revert_purchase_order_arrival", { p_purchase_order_id: poId });
+        toast("入荷記録を取り消しました");
+        await load();
+      } catch (e) {
+        toast("取消は反映されていません。もう一度お試しください");
+        console.error(e);
+      }
     });
-    load().catch(() => {});
-  } catch (e) { toast("記録に失敗しました"); console.error(e); }
+    await load();
+  } catch (e) {
+    toast("入荷は反映されていません。もう一度お試しください");
+    console.error(e);
+  } finally {
+    busyPOs.delete(poId);
+    renderPOs();
+  }
 }
 
 async function poCancel(poId) {
@@ -366,13 +379,29 @@ function renderArrivalList() {
 }
 
 async function deleteArrival(txId) {
+  const arrival = todayArrivals.find((t) => t.id === txId);
+  if (arrival?.purchaseOrderId) {
+    if (!confirm("この入荷記録を取り消しますか？\n発注済みの状態に戻り、在庫も入荷前の量に戻ります。")) return;
+    try {
+      await rpc("fn_revert_purchase_order_arrival", { p_purchase_order_id: arrival.purchaseOrderId });
+      toast("入荷の記録を取り消しました");
+      await load();
+    } catch (e) {
+      toast("取消は反映されていません。もう一度お試しください");
+      console.error(e);
+    }
+    return;
+  }
   try {
-    await apiFetch(`/rest/v1/inventory_transactions?id=eq.${txId}`, { method: "DELETE" });
+    await rpc("fn_delete_manual_arrival", { p_transaction_id: txId });
     todayArrivals = todayArrivals.filter((t) => t.id !== txId);
     renderArrivalList();
     toast("入荷の記録を取り消しました");
     load().catch(() => {});
-  } catch (e) { toast("取消に失敗しました"); console.error(e); }
+  } catch (e) {
+    toast("取消は反映されていません。棚卸確定後の入荷は取り消せません");
+    console.error(e);
+  }
 }
 
 function pickIngredient(id) {

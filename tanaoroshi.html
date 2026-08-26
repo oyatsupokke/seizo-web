@@ -288,12 +288,18 @@ async function saveMeasure() {
   const hasUnit = !useGram && target.order_unit && target.order_unit_to_g > 0;
   const unit = hasUnit ? target.order_unit : "g";
   const grams = hasUnit ? v * target.order_unit_to_g : v;
+  // 通信完了時刻ではなく、現場で「記録」を押した時刻を材料ごとに保持する。
+  const measuredAt = new Date().toISOString();
   try {
     await rpc("fn_set_stocktake_item", {
       p_stocktake_id: st.id, p_ingredient_id: target.id,
       p_measured: v, p_unit: unit, p_measured_g: grams,
+      p_measured_at: measuredAt,
     });
-    items[target.id] = { ingredient_id: target.id, measured_amount: v, measured_unit: unit, measured_g: grams };
+    items[target.id] = {
+      ingredient_id: target.id, measured_amount: v, measured_unit: unit,
+      measured_g: grams, measured_at: measuredAt,
+    };
     closeSheets();
     render();
   } catch (e) { toast("記録に失敗しました"); console.error(e); }
