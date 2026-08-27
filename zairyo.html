@@ -29,6 +29,7 @@
   .tax-seg .extax{flex:1; text-align:right; font-size:.85rem; color:#666;}
   .confirm-box{background:#fdf6e8; border-radius:10px; padding:10px 12px; font-size:.9rem; margin:10px 0;}
   .ro-line{background:#f4f0fa; border-radius:10px; padding:10px 12px; font-size:.88rem; margin-top:12px;}
+  .btn-book{flex:0 0 auto; background:#efeaf9; border-radius:8px; padding:7px 10px; font-size:.9rem;}
 </style>
 </head>
 <body>
@@ -90,15 +91,26 @@
     <button type="button" id="s-off" onclick="setActive(false)">アーカイブ（廃番）</button>
   </div>
   <div class="hint">アーカイブは仕入先の廃番・代替切替のときの片付け用。レシピの材料行からは消えませんが、新しいレシピで選べなくなり、発注アラートからも外れます</div>
+  <div id="s-recipe-sec" style="display:none">
+    <div class="section-label" style="margin-top:16px;">📖 レシピ（見るだけ・直すのは「レシピ登録」で）</div>
+    <div id="s-recipe"></div>
+  </div>
   <div class="confirm-box" id="s-confirm" style="display:none"></div>
   <div style="display:flex; gap:10px; margin-top:16px">
     <button style="flex:1; background:#eee" onclick="closeSheet()">もどる</button>
     <button class="btn-primary" style="flex:2" id="s-save" onclick="save()">保存する</button>
   </div>
 </div>
+<div class="sheet" id="sheet-view">
+  <h2 id="v-title">📖 レシピ</h2>
+  <div id="v-body"></div>
+  <div style="margin-top:14px">
+    <button style="width:100%; background:#eee" onclick="closeSheet()">とじる</button>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
-<script src="api.js?v=20260824c"></script>
+<script src="api.js?v=20260827a"></script>
 <script>
 let items = [], cur = null, curActive = true, curTax = 8, selCat = null, confirming = false;
 
@@ -139,6 +151,7 @@ function renderList(){
       ${i.is_active ? "" : `<span class="badge-kyubai">アーカイブ</span>`}
       ${i.category ? `<span class="cat">${esc(i.category)}</span>` : ""}
       ${priceText(i)}
+      ${isBuy(i) ? "" : `<button type="button" class="btn-book" onclick="event.stopPropagation();openRecipeQuick('${i.id}')">📖</button>`}
     </div>`).join("") || `<div class="empty">一致する材料がありません</div>`;
 }
 
@@ -203,12 +216,23 @@ function openSheet(id){
     $("s-hunitg").value = cur.order_unit_to_g ?? "";
   }
   $("hansei-fields").style.display = isBuy(cur) ? "none" : "block";
+  $("s-recipe-sec").style.display = isBuy(cur) ? "none" : "block";
+  if (!isBuy(cur)) RV.show($("s-recipe"), `ingredient_id=eq.${cur.id}`, cur.name, 1);
   $("fold").style.display = "none";
   setActive(cur.is_active);
   renderSheetCats();
   $("sheet-bg").style.display = "block"; $("sheet").style.display = "block";
 }
-function closeSheet(){ $("sheet-bg").style.display = "none"; $("sheet").style.display = "none"; cur = null; }
+function closeSheet(){ $("sheet-bg").style.display = "none"; $("sheet").style.display = "none"; $("sheet-view").style.display = "none"; cur = null; }
+
+/* 一覧の📖＝見るだけのレシピシート（半製品のみ・編集フォームを経由しない） */
+function openRecipeQuick(id){
+  const i = items.find((x)=>x.id===id);
+  if (!i) return;
+  $("v-title").textContent = `📖 ${i.name}`;
+  $("sheet-bg").style.display = "block"; $("sheet-view").style.display = "block";
+  RV.show($("v-body"), `ingredient_id=eq.${i.id}`, i.name, 1);
+}
 
 function numOrNull(id){ const v = $(id).value; return v === "" ? null : Number(v); }
 

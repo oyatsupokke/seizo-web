@@ -11,6 +11,7 @@
   .p-row .nm{flex:1; min-width:0; overflow-wrap:anywhere; font-size:.95rem;}
   .p-row .cat{flex:0 0 auto; font-size:.72rem; color:#777; background:#f4f1ea; border-radius:6px; padding:2px 7px;}
   .p-row .price{flex:0 0 auto; font-size:.9rem; font-variant-numeric:tabular-nums;}
+  .btn-book{flex:0 0 auto; background:#efeaf9; border-radius:8px; padding:7px 10px; font-size:.9rem;}
   .badge-noprice{font-size:.72rem; color:#b26a00; background:#fdf3e0; border-radius:6px; padding:2px 7px; font-weight:700;}
   .badge-kyubai{font-size:.72rem; color:#c62828; background:#fbe9e9; border-radius:6px; padding:2px 7px; font-weight:700;}
   .sheet label{display:block; margin:12px 0 4px; font-weight:700; font-size:.88rem;}
@@ -68,15 +69,26 @@
     <label>メモ（内部用・任意）</label>
     <input type="text" id="s-memo">
   </div>
+  <div id="s-recipe-sec">
+    <div class="section-label" style="margin-top:16px;">📖 レシピ（見るだけ・直すのは「レシピ登録」で）</div>
+    <div id="s-recipe"></div>
+  </div>
   <div class="confirm-box" id="s-confirm" style="display:none"></div>
   <div style="display:flex; gap:10px; margin-top:16px">
     <button style="flex:1; background:#eee" onclick="closeSheet()">もどる</button>
     <button class="btn-primary" style="flex:2" id="s-save" onclick="save()">保存する</button>
   </div>
 </div>
+<div class="sheet" id="sheet-view">
+  <h2 id="v-title">📖 レシピ</h2>
+  <div id="v-body"></div>
+  <div style="margin-top:14px">
+    <button style="width:100%; background:#eee" onclick="closeSheet()">とじる</button>
+  </div>
+</div>
 <div class="toast" id="toast"></div>
 
-<script src="api.js?v=20260824c"></script>
+<script src="api.js?v=20260827a"></script>
 <script>
 let products = [], cur = null, curActive = true, selCat = null, confirming = false;
 
@@ -108,6 +120,7 @@ function renderList(){
       ${p.is_active ? "" : `<span class="badge-kyubai">アーカイブ</span>`}
       ${p.category ? `<span class="cat">${esc(p.category)}</span>` : ""}
       ${p.price_in_tax != null ? `<span class="price">${yen(p.price_in_tax)}</span>` : (p.is_active ? `<span class="badge-noprice">価格未設定</span>` : "")}
+      <button type="button" class="btn-book" onclick="event.stopPropagation();openRecipeQuick('${p.id}')">📖</button>
     </div>`).join("") || `<div class="empty">一致する商品がありません</div>`;
 }
 
@@ -141,9 +154,20 @@ function openSheet(id){
   $("fold").style.display = "none";
   setActive(cur.is_active);
   renderSheetCats();
+  $("s-recipe-sec").style.display = "";
+  RV.show($("s-recipe"), `product_id=eq.${cur.id}`, cur.name, 1);
   $("sheet-bg").style.display = "block"; $("sheet").style.display = "block";
 }
-function closeSheet(){ $("sheet-bg").style.display = "none"; $("sheet").style.display = "none"; cur = null; }
+function closeSheet(){ $("sheet-bg").style.display = "none"; $("sheet").style.display = "none"; $("sheet-view").style.display = "none"; cur = null; }
+
+/* 一覧の📖＝見るだけのレシピシート（編集フォームを経由しない・genba指摘） */
+function openRecipeQuick(id){
+  const p = products.find((x)=>x.id===id);
+  if (!p) return;
+  $("v-title").textContent = `📖 ${p.name}`;
+  $("sheet-bg").style.display = "block"; $("sheet-view").style.display = "block";
+  RV.show($("v-body"), `product_id=eq.${p.id}`, p.name, 1);
+}
 
 function diff(){
   const d = {};

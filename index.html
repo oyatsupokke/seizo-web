@@ -63,7 +63,7 @@
 </div>
 <div class="toast" id="toast"></div>
 
-<script src="api.js"></script>
+<script src="api.js?v=20260827a"></script>
 <script>
 let tasks = [], members = [], products = [];
 let pendingProduct = null, memberTarget = null;
@@ -266,8 +266,6 @@ function cardHtml(t) {
     <div class="title">${name}${batch}</div>${memo}${row}</div>`;
 }
 
-let recipeData = null;   // 開いているレシピ {items, memo, n}
-
 async function openRecipe(tid) {
   const t = findT(tid);
   if (!t) return;
@@ -285,51 +283,9 @@ async function openRecipe(tid) {
       if (!ing.length) { $("recipe-body").innerHTML = '<div class="empty">レシピが見つかりません</div>'; return; }
       key = `ingredient_id=eq.${ing[0].id}`;
     } else { $("recipe-body").innerHTML = '<div class="empty">レシピが未登録です</div>'; return; }
-    const recs = await rest(`recipes?${key}&is_active=is.true&select=method_memo,recipe_items(amount_g_per_batch,ingredients(name))&limit=1`);
-    const r = recs[0];
-    if (!r || !r.recipe_items?.length) { $("recipe-body").innerHTML = '<div class="empty">レシピが未登録です</div>'; return; }
-    recipeData = {
-      items: r.recipe_items.slice().sort((a, b) => b.amount_g_per_batch - a.amount_g_per_batch),
-      memo: r.method_memo,
-      n: Number(t.batch_count) || 1,
-    };
-    renderRecipe();
+    // 表示は共通のRV（api.js）：×バッチ計算＋生地行タップで中身に潜れる
+    await RV.show($("recipe-body"), key, t.item_name || "レシピ", Number(t.batch_count) || 1);
   } catch (e) { $("recipe-body").innerHTML = '<div class="empty">読み込みエラー</div>'; console.error(e); }
-}
-
-function setRecipeBatches(n) {
-  if (n === "other") {
-    const v = prompt("バッチ数");
-    if (v === null || v === "" || Number(v) <= 0) return;
-    n = Number(v);
-  }
-  recipeData.n = n;
-  renderRecipe();
-}
-
-function renderRecipe() {
-  const { items, memo, n } = recipeData;
-  const total = items.reduce((s2, it) => s2 + Number(it.amount_g_per_batch), 0);
-  const chips = [1, 2, 3, 4].map((b) =>
-    `<button class="chip ${b === n ? "setted" : ""}" style="margin:0;" onclick="setRecipeBatches(${b})">×${b}</button>`).join(" ")
-    + ` <button class="chip ${![1, 2, 3, 4].includes(n) ? "setted" : ""}" style="margin:0;" onclick="setRecipeBatches('other')">${![1, 2, 3, 4].includes(n) ? `×${n}` : "その他"}</button>`;
-  $("recipe-body").innerHTML =
-    `<div style="display:flex; gap:6px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
-      <span style="font-size:12px; color:#888;">バッチ数</span>${chips}</div>
-    <table style="width:100%; border-collapse:collapse; font-size:15px;">
-      <tr style="color:#888; font-size:12px;"><th style="text-align:left; padding:4px 2px;">材料</th>
-        <th style="text-align:right; padding:4px 2px;">1バッチ</th>
-        ${n !== 1 ? `<th style="text-align:right; padding:4px 2px;">×${n}バッチ</th>` : ""}</tr>
-      ${items.map((it) => `<tr style="border-top:1px solid #eee;">
-        <td style="padding:6px 2px;">${esc(it.ingredients?.name || "?")}</td>
-        <td style="text-align:right; padding:6px 2px;">${Number(it.amount_g_per_batch)}g</td>
-        ${n !== 1 ? `<td style="text-align:right; padding:6px 2px;"><b>${Math.round(it.amount_g_per_batch * n * 10) / 10}g</b></td>` : ""}</tr>`).join("")}
-      <tr style="border-top:2px solid #ddd; font-weight:700;">
-        <td style="padding:6px 2px;">合計</td>
-        <td style="text-align:right; padding:6px 2px;">${Math.round(total * 10) / 10}g</td>
-        ${n !== 1 ? `<td style="text-align:right; padding:6px 2px;">${Math.round(total * n * 10) / 10}g</td>` : ""}</tr>
-    </table>` +
-    (memo ? `<div class="detail" style="margin-top:10px; white-space:pre-wrap;">${esc(memo)}</div>` : "");
 }
 
 function elapsedMin(t) {
