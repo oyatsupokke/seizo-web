@@ -101,29 +101,38 @@ async function createIngredient(name) {
   return row;
 }
 
-/* ---------- レシピ表示（読み取り専用・×バッチ計算・生地に潜れる） ----------
+/* ---------- レシピ表示（読み取り専用・×バッチ計算・生地の中身は最初から展開） ----------
  * 商品マスタ／材料マスタ（半製品）／今日やることの📖で共通。
- * RV.show(el, key, name, n) で開始。keyは "product_id=eq.X" か "ingredient_id=eq.X"。 */
+ * RV.show(el, key, name, n) で開始。keyは "product_id=eq.X" か "ingredient_id=eq.X"。
+ * 二段レシピ（商品→生地）は、生地の行の下に中身（粉・バター…）をインデントで
+ * そのまま見せる（タップで潜らせない・まりほ指摘 2026-08-27）。 */
 const RV = {
-  el: null, n: 1, cur: null, data: null, stack: [],
+  el: null, n: 1, data: null,
   async show(el, key, name, n) {
-    this.el = el; this.stack = []; this.n = Number(n) || 1;
-    await this._load(key, name);
-  },
-  async dive(key, name, needG) {
-    this.stack.push({ ...this.cur, n: this.n });
-    this.n = 1; // 潜った先は生地1バッチの配合を見せる（必要量は下の一行で示す）
-    await this._load(key, name, needG);
-  },
-  // onclick属性に名前文字列を埋めると引用符事故になるので、IDだけ受けて名前は手元のデータから引く
-  async diveIng(id) {
-    const it = this.data?.items.find((x) => x.ingredients?.id === id);
-    if (it) await this.dive(`ingredient_id=eq.${id}`, it.ingredients.name,
-      Math.round(Number(it.amount_g_per_batch) * this.n * 10) / 10);
-  },
-  async back() {
-    const p = this.stack.pop();
-    if (p) { this.n = p.n || 1; await this._load(p.key, p.name, p.needG); }
+    this.el = el; this.n = Number(n) || 1;
+    this.el.innerHTML = "読み込み中…";
+    try {
+      const recs = await rest(`recipes?${key}&is_active=is.true&select=method_memo,recipe_items(amount_g_per_batch,ingredients(id,name,kind))&limit=1`);
+      const r = recs[0];
+      if (!r || !r.recipe_items?.length) { this.data = null; this.render(); return; }
+      const items = r.recipe_items.slice().sort((a, b) => b.amount_g_per_batch - a.amount_g_per_batch);
+      // 半製品（生地・クリーム）の中身レシピをまとめて取得
+      const subIds = items.filter((it) => it.ingredients?.kind === "半製品").map((it) => it.ingredients.id);
+      const subs = {};
+      if (subIds.length) {
+        const srs = await rest(`recipes?ingredient_id=in.(${subIds.join(",")})&is_active=is.true&select=ingredient_id,recipe_items(amount_g_per_batch,ingredients(name))`);
+        for (const s of srs) {
+          const sitems = (s.recipe_items || []).slice().sort((a, b) => b.amount_g_per_batch - a.amount_g_per_batch);
+          const stotal = sitems.reduce((x, it) => x + Number(it.amount_g_per_batch), 0);
+          if (sitems.length && stotal > 0) subs[s.ingredient_id] = { items: sitems, total: stotal };
+        }
+      }
+      this.data = { items, subs, memo: r.method_memo };
+      this.render();
+    } catch (e) {
+      this.el.innerHTML = '<div class="empty">レシピの読み込みエラー</div>';
+      console.error(e);
+    }
   },
   setN(n) {
     if (n === "other") {
@@ -134,67 +143,51 @@ const RV = {
     this.n = n;
     this.render();
   },
-  async _load(key, name, needG) {
-    this.cur = { key, name, needG };
-    this.el.innerHTML = "読み込み中…";
-    try {
-      const recs = await rest(`recipes?${key}&is_active=is.true&select=method_memo,recipe_items(amount_g_per_batch,ingredients(id,name,kind))&limit=1`);
-      const r = recs[0];
-      this.data = (r && r.recipe_items?.length)
-        ? { items: r.recipe_items.slice().sort((a, b) => b.amount_g_per_batch - a.amount_g_per_batch), memo: r.method_memo }
-        : null;
-      this.render();
-    } catch (e) {
-      this.el.innerHTML = '<div class="empty">レシピの読み込みエラー</div>';
-      console.error(e);
-    }
-  },
   render() {
-    const crumb = (this.stack.length
-      ? `<button class="chip" style="margin:0 6px 0 0;" onclick="RV.back()">← 戻る</button>` +
-        esc(this.stack.map((s) => s.name).join(" ▸ ")) + " ▸ "
-      : "") + `<b>${esc(this.cur.name)}</b>`;
     if (!this.data) {
-      this.el.innerHTML = `<div style="margin-bottom:6px;">${crumb}</div>` +
-        '<div class="empty">レシピが未登録です（登録は「📖 レシピ登録」から）</div>';
+      this.el.innerHTML = '<div class="empty">レシピが未登録です（登録は「📖 レシピ登録」から）</div>';
       return;
     }
-    const { items, memo } = this.data;
+    const { items, subs, memo } = this.data;
     const n = this.n;
+    const r1 = (x) => Math.round(x * 10) / 10;
     const total = items.reduce((s2, it) => s2 + Number(it.amount_g_per_batch), 0);
-    // 潜った先で「元のレシピだと何g必要か」を換算表示（暗算させない）
-    const needLine = this.cur.needG && total > 0
-      ? `<div style="background:#f4f0fa; border-radius:8px; padding:8px 10px; font-size:.85rem; margin-bottom:8px;">
-          この分だと <b>${this.cur.needG}g</b> 必要（1バッチ＝${Math.round(total * 10) / 10}g ≒ 約${Math.round(this.cur.needG / total * 10) / 10}バッチ）</div>`
-      : "";
     const chips = [1, 2, 3, 4].map((b) =>
       `<button class="chip ${b === n ? "setted" : ""}" style="margin:0;" onclick="RV.setN(${b})">×${b}</button>`).join(" ")
       + ` <button class="chip ${![1, 2, 3, 4].includes(n) ? "setted" : ""}" style="margin:0;" onclick="RV.setN('other')">${![1, 2, 3, 4].includes(n) ? `×${n}` : "その他"}</button>`;
-    const nameCell = (it) => {
-      const ing = it.ingredients;
-      if (ing?.kind === "半製品" && ing?.id) {
-        // 生地・クリームは中身に潜れる（Phase Dの二段レシピで「合計しか見えない」対策）
-        return `<a style="color:#5b3fa8; font-weight:700; text-decoration:underline; cursor:pointer;"
-          onclick="RV.diveIng('${ing.id}')">${esc(ing.name)} ▸ 中身</a>`;
+    const rowsHtml = items.map((it) => {
+      const g = Number(it.amount_g_per_batch);
+      const isHansei = it.ingredients?.kind === "半製品";
+      let html = `<tr style="border-top:1px solid #eee;">
+        <td style="padding:6px 2px;${isHansei ? " color:#5b3fa8; font-weight:700;" : ""}">${esc(it.ingredients?.name || "?")}</td>
+        <td style="text-align:right; padding:6px 2px;">${g}g</td>
+        ${n !== 1 ? `<td style="text-align:right; padding:6px 2px;"><b>${r1(g * n)}g</b></td>` : ""}</tr>`;
+      // 生地・クリームは中身をその場に展開（この行の量に按分したg）
+      const sub = isHansei && subs[it.ingredients.id];
+      if (sub) {
+        const f = g / sub.total;
+        html += sub.items.map((s) => {
+          const sg = r1(Number(s.amount_g_per_batch) * f);
+          return `<tr style="color:#777; font-size:.85em;">
+            <td style="padding:2px 2px 2px 18px;">└ ${esc(s.ingredients?.name || "?")}</td>
+            <td style="text-align:right; padding:2px;">${sg}g</td>
+            ${n !== 1 ? `<td style="text-align:right; padding:2px;">${r1(sg * n)}g</td>` : ""}</tr>`;
+        }).join("");
       }
-      return esc(ing?.name || "?");
-    };
+      return html;
+    }).join("");
     this.el.innerHTML =
-      `<div style="margin-bottom:6px; overflow-wrap:anywhere;">${crumb}</div>${needLine}
-      <div style="display:flex; gap:6px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
+      `<div style="display:flex; gap:6px; align-items:center; margin-bottom:8px; flex-wrap:wrap;">
         <span style="font-size:12px; color:#888;">バッチ数</span>${chips}</div>
       <table style="width:100%; border-collapse:collapse; font-size:15px;">
         <tr style="color:#888; font-size:12px;"><th style="text-align:left; padding:4px 2px;">材料</th>
           <th style="text-align:right; padding:4px 2px;">1バッチ</th>
           ${n !== 1 ? `<th style="text-align:right; padding:4px 2px;">×${n}バッチ</th>` : ""}</tr>
-        ${items.map((it) => `<tr style="border-top:1px solid #eee;">
-          <td style="padding:6px 2px;">${nameCell(it)}</td>
-          <td style="text-align:right; padding:6px 2px;">${Number(it.amount_g_per_batch)}g</td>
-          ${n !== 1 ? `<td style="text-align:right; padding:6px 2px;"><b>${Math.round(it.amount_g_per_batch * n * 10) / 10}g</b></td>` : ""}</tr>`).join("")}
+        ${rowsHtml}
         <tr style="border-top:2px solid #ddd; font-weight:700;">
           <td style="padding:6px 2px;">合計</td>
-          <td style="text-align:right; padding:6px 2px;">${Math.round(total * 10) / 10}g</td>
-          ${n !== 1 ? `<td style="text-align:right; padding:6px 2px;">${Math.round(total * n * 10) / 10}g</td>` : ""}</tr>
+          <td style="text-align:right; padding:6px 2px;">${r1(total)}g</td>
+          ${n !== 1 ? `<td style="text-align:right; padding:6px 2px;">${r1(total * n)}g</td>` : ""}</tr>
       </table>` +
       (memo ? `<div class="detail" style="margin-top:10px; white-space:pre-wrap;">${esc(memo)}</div>` : "");
   },
