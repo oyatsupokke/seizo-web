@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>製造管理</title>
+<link rel="stylesheet" href="app.css">
+<style>
+  .store{font-size:.8rem; color:#888; margin-top:2px;}
+  .tiles{display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:8px 0 4px;}
+  .tile{display:block; background:#fff; border-radius:14px; padding:16px 14px; text-decoration:none; color:#333; box-shadow:0 1px 3px rgba(0,0,0,.06);}
+  .tile:active{transform:scale(.98);}
+  .tile .ic{font-size:1.6rem; display:block; margin-bottom:6px;}
+  .tile .nm{font-weight:700; font-size:.95rem;}
+  .tile .bd{font-size:.75rem; margin-top:6px; min-height:1.1em;}
+  .bd .ok{color:#2e7d32;}
+  .bd .warn{color:#b26a00; font-weight:700;}
+  .bd .bad{color:#c62828; font-weight:700;}
+  .bd .quiet{color:#999;}
+  .plain-toggle{display:block; text-align:center; font-size:.78rem; color:#888; margin:22px 0 8px; text-decoration:underline; cursor:pointer;}
+</style>
+</head>
+<body>
+<header>
+  <h1>製造管理</h1>
+  <div class="store" id="store"></div>
+</header>
+<main>
+  <div class="section-label">現場</div>
+  <div class="tiles">
+    <a class="tile" href="index.html"><span class="ic">📝</span><span class="nm">今日やること</span><div class="bd" id="bd-today"></div></a>
+    <a class="tile" href="plan.html"><span class="ic">📅</span><span class="nm">予定登録・一覧</span><div class="bd" id="bd-plan"></div></a>
+    <a class="tile" href="zaiko.html"><span class="ic">📦</span><span class="nm">在庫・発注</span><div class="bd" id="bd-zaiko"></div></a>
+    <a class="tile" href="tanaoroshi.html"><span class="ic">📋</span><span class="nm">棚卸</span><div class="bd" id="bd-tana"></div></a>
+    <a class="tile" href="recipe-view.html"><span class="ic">📖</span><span class="nm">レシピをみる</span><div class="bd"><span class="quiet">タスクなしで見られます</span></div></a>
+  </div>
+  <div class="section-label" style="margin-top:14px;">マスタ</div>
+  <div class="tiles">
+    <a class="tile" href="recipe.html"><span class="ic">📖</span><span class="nm">レシピ登録</span><div class="bd"></div></a>
+    <a class="tile" href="shohin.html"><span class="ic">🏷</span><span class="nm">商品マスタ</span><div class="bd"></div></a>
+    <a class="tile" href="zairyo.html"><span class="ic">🧂</span><span class="nm">材料マスタ</span><div class="bd" id="bd-zairyo"></div></a>
+    <a class="tile" href="staff.html"><span class="ic">👤</span><span class="nm">スタッフ</span><div class="bd"></div></a>
+  </div>
+  <span class="plain-toggle" id="toggle" onclick="togglePlain()"></span>
+</main>
+
+<script src="api.js?v=20260824c"></script>
+<script>
+const isPlain = new URLSearchParams(location.search).get("plain") === "1";
+
+function togglePlain(){ location.search = isPlain ? "" : "?plain=1"; }
+
+function paintToggle(){
+  $("toggle").textContent = isPlain ? "件数バッジあり版を見る" : "件数バッジなし版を見る";
+}
+
+async function load(){
+  try {
+    const t = await rest("tenants?select=name");
+    if (t[0]?.name) $("store").textContent = t[0].name;
+  } catch {}
+  if (isPlain) return;
+  try {
+    const [tasks, alerts, pos, temp] = await Promise.all([
+      rest("v_today_tasks?select=status"),
+      rest("v_order_alerts?select=alert_kind").catch(() => []),
+      rest("purchase_orders?status=eq.発注済&select=id"),
+      rest("ingredients?category=eq.未分類&is_active=eq.true&select=id").catch(() => []),
+    ]);
+    const nokori = tasks.filter((x) => x.status !== "完了").length;
+    $("bd-today").innerHTML = tasks.length === 0
+      ? '<span class="quiet">今日の予定なし</span>'
+      : (nokori === 0 ? '<span class="ok">全部完了 ✔</span>' : `<span class="warn">残り${nokori}件</span>`);
+    const fusoku = alerts.filter((a) => a.alert_kind === "不足").length;
+    const hattenten = alerts.length - fusoku;
+    const parts = [];
+    if (fusoku) parts.push(`<span class="bad">不足${fusoku}</span>`);
+    if (hattenten) parts.push(`<span class="warn">発注点${hattenten}</span>`);
+    if (pos.length) parts.push(`<span class="quiet">発注済${pos.length}</span>`);
+    $("bd-zaiko").innerHTML = parts.join("・") || '<span class="ok">アラートなし</span>';
+    if (temp.length) $("bd-zairyo").innerHTML = `<span class="warn">単価未設定${temp.length}</span>`;
+  } catch (e) { console.error(e); }
+}
+
+if (requireLogin()){
+  paintToggle();
+  load();
+}
+</script>
+</body>
+</html>
