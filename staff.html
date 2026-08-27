@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>スタッフ — 製造管理</title>
+<link rel="stylesheet" href="app.css">
+<style>
+  .p-row{display:flex; align-items:center; gap:8px; background:#fff; border-radius:10px; padding:13px 12px; margin:6px 0; cursor:pointer;}
+  .p-row.inactive{opacity:.55; background:#f3f1ec;}
+  .p-row .nm{flex:1; min-width:0; overflow-wrap:anywhere; font-size:1rem; font-weight:700;}
+  .p-row .sub{flex:0 0 auto; font-size:.72rem; color:#777;}
+  .sheet label{display:block; margin:12px 0 4px; font-weight:700; font-size:.88rem;}
+  .sheet input[type=text]{width:100%; font-size:1rem; padding:10px; border-radius:10px; border:1px solid #ddd; box-sizing:border-box;}
+  .sheet .hint{font-size:.78rem; color:#888; margin-top:3px;}
+  .state-seg{display:flex; gap:8px; margin-top:4px;}
+  .state-seg button{flex:1; padding:10px; border-radius:10px; background:#f4f1ea; color:#555; font-weight:700;}
+  .state-seg button.on-active{background:#eef7ee; color:#2e7d32;}
+  .state-seg button.on-inactive{background:#fbe9e9; color:#c62828;}
+  .btn-up{background:#f4f1ea; color:#555; border-radius:10px; padding:10px 14px; font-weight:700; width:100%; margin-top:12px;}
+</style>
+</head>
+<body>
+<header>
+  <h1>スタッフ</h1>
+  <div class="nav"><a href="index.html">🏠 今日やること</a><a href="shohin.html">🏷 商品マスタ</a><a href="zairyo.html">🧂 材料マスタ</a></div>
+</header>
+<main>
+  <div class="hint" style="font-size:.8rem; color:#888; margin:6px 0;">ここに登録した名前が、作業の「担当」チップに出ます（上から順）</div>
+  <div id="list"><div class="empty">読み込み中…</div></div>
+</main>
+<div class="fab" onclick="newStaff()">🆕 新しいスタッフ</div>
+
+<div class="sheet-bg" id="sheet-bg" onclick="closeSheet()"></div>
+<div class="sheet" id="sheet">
+  <h2 id="s-title">スタッフを編集</h2>
+  <label>名前（チップに出る表示名）</label>
+  <input type="text" id="s-name" autocomplete="off">
+  <div class="hint" id="s-name-hint"></div>
+  <div id="edit-only">
+    <label>状態</label>
+    <div class="state-seg">
+      <button type="button" id="seg-active" onclick="setState(true)">働いている</button>
+      <button type="button" id="seg-inactive" onclick="setState(false)">やめた</button>
+    </div>
+    <div class="hint">「やめた」にするとチップから消えます。過去の記録はそのまま残ります</div>
+    <button type="button" class="btn-up" id="btn-up" onclick="moveUp()">↑ チップの並びを1つ上へ</button>
+    <div class="hint" id="pos-hint"></div>
+  </div>
+  <div class="row" style="margin-top:16px;">
+    <button class="btn-finish" style="flex:2" onclick="save()">✔ 保存</button>
+    <button style="flex:1; background:#eee" onclick="closeSheet()">もどる</button>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="api.js?v=20260824c"></script>
+<script>
+let staff = [];      // 全員（is_active問わず）
+let cur = null;      // 編集中の行（nullなら新規）
+let curActive = true;
+let myTenantId = null;
+
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),2500); }
+function norm(s){ return (s||"").normalize("NFKC").replace(/[\s　]/g,""); }
+
+async function load(){
+  staff = await rest("members?select=id,display_name,is_active,sort_order&order=sort_order,created_at");
+  if (!myTenantId) myTenantId = await sharedTenantId();
+  renderList();
+}
+
+const actives = () => staff.filter((m)=>m.is_active);
+
+function renderList(){
+  const act = actives();
+  const inact = staff.filter((m)=>!m.is_active);
+  let html = act.map((m)=>`<div class="p-row" onclick="openEdit('${m.id}')"><div class="nm">${esc(m.display_name)}</div></div>`).join("");
+  if (!act.length) html = '<div class="empty">まだ登録がありません。右下の「🆕 新しいスタッフ」から登録してください</div>';
+  if (inact.length){
+    html += `<div class="section-label" style="margin-top:16px;">やめたスタッフ（タップで戻せます）</div>` +
+      inact.map((m)=>`<div class="p-row inactive" onclick="openEdit('${m.id}')"><div class="nm">${esc(m.display_name)}</div><div class="sub">やめた</div></div>`).join("");
+  }
+  $("list").innerHTML = html;
+}
+
+function openSheet(){ $("sheet-bg").style.display = "block"; $("sheet").style.display = "block"; }
+function closeSheet(){ $("sheet-bg").style.display = "none"; $("sheet").style.display = "none"; cur = null; }
+
+function paintState(){
+  $("seg-active").classList.toggle("on-active", curActive);
+  $("seg-inactive").classList.toggle("on-inactive", !curActive);
+  // 並び替えは働いている人だけ（やめた人はチップに出ないので並びの意味がない）
+  $("btn-up").style.display = curActive ? "" : "none";
+  paintPos();
+}
+function paintPos(){
+  const el = $("pos-hint");
+  if (!cur || !curActive || !cur.is_active){ el.textContent = ""; return; }
+  const act = actives();
+  const i = act.findIndex((m)=>m.id === cur.id);
+  el.textContent = i >= 0 ? `いま上から${i + 1}番目（全${act.length}人）` : "";
+}
+function setState(v){ curActive = v; paintState(); }
+
+function newStaff(){
+  cur = null; curActive = true;
+  $("s-title").textContent = "新しいスタッフ";
+  $("s-name").value = "";
+  $("s-name-hint").textContent = "";
+  $("edit-only").style.display = "none";
+  openSheet();
+  $("s-name").focus();
+}
+
+function openEdit(id){
+  cur = staff.find((m)=>m.id === id);
+  if (!cur) return;
+  curActive = cur.is_active;
+  $("s-title").textContent = "スタッフを編集";
+  $("s-name").value = cur.display_name;
+  // やめた人のレコードを新人に使い回すと、過去の製造記録の担当まで新しい名前になってしまう
+  $("s-name-hint").textContent = cur.is_active ? "" : "新しい人はこの名前を書き換えず、🆕から追加してください";
+  $("edit-only").style.display = "";
+  paintState();
+  openSheet();
+}
+
+async function save(){
+  const name = $("s-name").value.trim();
+  if (!name){ $("s-name-hint").textContent = "名前を入れてください"; return; }
+  const dup = staff.find((m)=>norm(m.display_name) === norm(name) && m.id !== cur?.id);
+  if (dup && !confirm(`「${dup.display_name}」はすでに登録されています。\n同じ名前でもう1人登録しますか？`)) return;
+  try {
+    if (!cur){
+      const maxOrder = Math.max(0, ...staff.map((m)=>m.sort_order || 0));
+      await insert("members", [{ tenant_id: myTenantId, display_name: name, is_active: true, sort_order: maxOrder + 1 }]);
+      toast(`${name} を登録しました`);
+    } else {
+      if (cur.is_active && !curActive){
+        if (!confirm(`${cur.display_name} を「やめた」にしますか？\n担当チップから消えます（過去の記録は残ります）`)) return;
+      }
+      const d = {};
+      if (name !== cur.display_name) d.display_name = name;
+      if (curActive !== cur.is_active) d.is_active = curActive;
+      if (!Object.keys(d).length){ toast("変更はありません"); closeSheet(); return; }
+      await apiFetch(`/rest/v1/members?id=eq.${cur.id}`, { method: "PATCH", body: JSON.stringify(d) });
+      toast("保存しました");
+    }
+    closeSheet();
+    await load();
+  } catch(e){ toast("保存に失敗しました"); console.error(e); }
+}
+
+async function moveUp(){
+  if (!cur) return;
+  const act = actives();
+  const i = act.findIndex((m)=>m.id === cur.id);
+  if (i <= 0){ toast("いちばん上です"); return; }
+  // 並びは配列の位置で作り直す（sort_orderの重複・歯抜けもここで直る）
+  [act[i-1], act[i]] = [act[i], act[i-1]];
+  try {
+    await Promise.all(act.map((m, idx) =>
+      apiFetch(`/rest/v1/members?id=eq.${m.id}`, { method: "PATCH", body: JSON.stringify({ sort_order: idx + 1 }) })));
+    await load();
+    cur = staff.find((m)=>m.id === cur.id) || null;
+    paintPos();
+    toast("1つ上に動かしました");
+  } catch(e){ toast("並び替えに失敗しました"); console.error(e); }
+}
+
+if (requireLogin()){
+  $("today") && ($("today").textContent = jpDate(new Date()));
+  load().catch((e)=>{ console.error(e); toast("読み込みに失敗しました"); });
+}
+</script>
+</body>
+</html>
