@@ -92,8 +92,9 @@
   </div>
   <div class="hint">アーカイブは仕入先の廃番・代替切替のときの片付け用。レシピの材料行からは消えませんが、新しいレシピで選べなくなり、発注アラートからも外れます</div>
   <div id="s-recipe-sec" style="display:none">
-    <div class="section-label" style="margin-top:16px;">📖 レシピ（見るだけ・直すのは「レシピ登録」で）</div>
+    <div class="section-label" style="margin-top:16px;">📖 レシピ</div>
     <div id="s-recipe"></div>
+    <button type="button" class="fold-toggle" id="s-recipe-edit" style="margin-top:8px;">✏️ このレシピを直す</button>
   </div>
   <div class="confirm-box" id="s-confirm" style="display:none"></div>
   <div style="display:flex; gap:10px; margin-top:16px">
@@ -104,8 +105,9 @@
 <div class="sheet" id="sheet-view">
   <h2 id="v-title">📖 レシピ</h2>
   <div id="v-body"></div>
-  <div style="margin-top:14px">
-    <button style="width:100%; background:#eee" onclick="closeSheet()">とじる</button>
+  <div style="display:flex; gap:10px; margin-top:14px">
+    <button style="flex:1; background:#eee" onclick="closeSheet()">とじる</button>
+    <button style="flex:1; background:#efeaf9; color:#5b3fa8; font-weight:700" id="v-edit">✏️ このレシピを直す</button>
   </div>
 </div>
 <div class="toast" id="toast"></div>
@@ -217,7 +219,10 @@ function openSheet(id){
   }
   $("hansei-fields").style.display = isBuy(cur) ? "none" : "block";
   $("s-recipe-sec").style.display = isBuy(cur) ? "none" : "block";
-  if (!isBuy(cur)) RV.show($("s-recipe"), `ingredient_id=eq.${cur.id}`, cur.name, 1);
+  if (!isBuy(cur)){
+    RV.show($("s-recipe"), `ingredient_id=eq.${cur.id}`, cur.name, 1);
+    $("s-recipe-edit").onclick = () => location.href = `recipe.html?ing=${cur.id}`;
+  }
   $("fold").style.display = "none";
   setActive(cur.is_active);
   renderSheetCats();
@@ -230,6 +235,7 @@ function openRecipeQuick(id){
   const i = items.find((x)=>x.id===id);
   if (!i) return;
   $("v-title").textContent = `📖 ${i.name}`;
+  $("v-edit").onclick = () => location.href = `recipe.html?ing=${i.id}`;
   $("sheet-bg").style.display = "block"; $("sheet-view").style.display = "block";
   RV.show($("v-body"), `ingredient_id=eq.${i.id}`, i.name, 1);
 }

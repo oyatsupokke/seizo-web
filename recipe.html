@@ -411,6 +411,10 @@ if (requireLogin()){
     hanseihin = ing.filter((x)=>x.kind==="半製品").map((x)=>({ ...x, isIng: true }));
     hasRecipe = new Set(rcp.map((r)=>r.product_id || r.ingredient_id));
     checkDraft();
+    // 商品マスタ・材料マスタの「✏️ このレシピを直す」から来たとき：対象を選択済みで開く
+    const qs = new URLSearchParams(location.search);
+    if (qs.get("product")) pickTarget(qs.get("product"), false);
+    else if (qs.get("ing")) pickTarget(qs.get("ing"), true);
   }).catch(()=>toast("読み込みエラー"));
 }
 </script>

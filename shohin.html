@@ -70,8 +70,11 @@
     <input type="text" id="s-memo">
   </div>
   <div id="s-recipe-sec">
-    <div class="section-label" style="margin-top:16px;">📖 レシピ（見るだけ・直すのは「レシピ登録」で）</div>
+    <div class="section-label" style="margin-top:16px;">📖 レシピ</div>
     <div id="s-recipe"></div>
+    <button type="button" class="fold-toggle" id="s-recipe-edit" style="margin-top:8px;">✏️ このレシピを直す</button>
+    <div class="section-label" style="margin-top:16px;">🏷 栄養成分・アレルゲン</div>
+    <div id="s-nutri"></div>
   </div>
   <div class="confirm-box" id="s-confirm" style="display:none"></div>
   <div style="display:flex; gap:10px; margin-top:16px">
@@ -82,8 +85,10 @@
 <div class="sheet" id="sheet-view">
   <h2 id="v-title">📖 レシピ</h2>
   <div id="v-body"></div>
-  <div style="margin-top:14px">
-    <button style="width:100%; background:#eee" onclick="closeSheet()">とじる</button>
+  <div id="v-extra"></div>
+  <div style="display:flex; gap:10px; margin-top:14px">
+    <button style="flex:1; background:#eee" onclick="closeSheet()">とじる</button>
+    <button style="flex:1; background:#efeaf9; color:#5b3fa8; font-weight:700" id="v-edit">✏️ このレシピを直す</button>
   </div>
 </div>
 <div class="toast" id="toast"></div>
@@ -156,15 +161,39 @@ function openSheet(id){
   renderSheetCats();
   $("s-recipe-sec").style.display = "";
   RV.show($("s-recipe"), `product_id=eq.${cur.id}`, cur.name, 1);
+  $("s-nutri").innerHTML = nutriHtml(cur);
+  $("s-recipe-edit").onclick = () => location.href = `recipe.html?product=${cur.id}`;
   $("sheet-bg").style.display = "block"; $("sheet").style.display = "block";
 }
 function closeSheet(){ $("sheet-bg").style.display = "none"; $("sheet").style.display = "none"; $("sheet-view").style.display = "none"; cur = null; }
 
-/* 一覧の📖＝見るだけのレシピシート（編集フォームを経由しない・genba指摘） */
+/* 栄養成分・アレルゲンの表示（データはPhase Bで原本スプレッドシートから移行済み） */
+function nutriHtml(p){
+  const n = p.nutrition || {};
+  const per = n.bag_g ? `1袋（${n.bag_g}g）あたり` : "";
+  const vals = [
+    n.kcal != null ? `エネルギー <b>${n.kcal}kcal</b>` : null,
+    n.protein_g != null ? `たんぱく質 ${n.protein_g}g` : null,
+    n.fat_g != null ? `脂質 ${n.fat_g}g` : null,
+    n.carb_g != null ? `炭水化物 ${n.carb_g}g` : null,
+    n.salt_g != null ? `食塩相当量 ${n.salt_g}g` : null,
+  ].filter(Boolean);
+  const nutri = vals.length
+    ? `<div style="font-size:.9rem;">${per ? per + "：" : ""}${vals.join("・")}</div>`
+    : `<div style="font-size:.85rem; color:#999;">栄養成分：未登録</div>`;
+  const alg = p.allergens
+    ? `<div style="font-size:.9rem; margin-top:4px;">アレルゲン：<b>${esc(p.allergens)}</b></div>`
+    : `<div style="font-size:.85rem; color:#999; margin-top:4px;">アレルゲン：未登録</div>`;
+  return `<div style="background:#faf8f3; border-radius:10px; padding:10px 12px;">${nutri}${alg}</div>`;
+}
+
+/* 一覧の📖＝見るだけの商品情報シート（レシピ＋栄養・アレルゲン。編集フォームを経由しない） */
 function openRecipeQuick(id){
   const p = products.find((x)=>x.id===id);
   if (!p) return;
   $("v-title").textContent = `📖 ${p.name}`;
+  $("v-extra").innerHTML = `<div class="section-label" style="margin-top:12px;">🏷 栄養成分・アレルゲン</div>` + nutriHtml(p);
+  $("v-edit").onclick = () => location.href = `recipe.html?product=${p.id}`;
   $("sheet-bg").style.display = "block"; $("sheet-view").style.display = "block";
   RV.show($("v-body"), `product_id=eq.${p.id}`, p.name, 1);
 }
@@ -249,7 +278,7 @@ $("search").addEventListener("input", renderList);
 
 if (requireLogin()){
   // アーカイブも含めて出す（戻す口はこの画面が唯一・genba指摘）
-  rest("products?select=id,display_code,name,category,price_in_tax,description,label_display_name,yield_per_batch,memo,is_active&order=name&limit=500")
+  rest("products?select=id,display_code,name,category,price_in_tax,description,label_display_name,yield_per_batch,memo,is_active,nutrition,allergens&order=name&limit=500")
     .then((p)=>{ products = p; renderChips(); renderList(); })
     .catch(()=>toast("読み込みエラー"));
 }
