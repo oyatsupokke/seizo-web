@@ -74,6 +74,9 @@
     <div id="s-recipe"></div>
     <button type="button" class="fold-toggle" id="s-recipe-edit" style="margin-top:8px;">✏️ このレシピを直す</button>
     <div class="section-label" style="margin-top:16px;">🏷 栄養成分・アレルゲン</div>
+    <label>1袋（1商品）あたりの内容量g</label>
+    <input type="number" id="s-bag" inputmode="decimal" min="0" step="any" oninput="refreshNutri()">
+    <div class="hint">ここを入れると、下の栄養成分がレシピから自動で計算されます</div>
     <div id="s-nutri"></div>
   </div>
   <div class="confirm-box" id="s-confirm" style="display:none"></div>
@@ -96,6 +99,7 @@
 <script src="api.js?v=20260827c"></script>
 <script>
 let products = [], cur = null, curActive = true, selCat = null, confirming = false;
+let nutriCalc = {};   // product_id -> v_product_nutrition の1行
 
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),2500); }
 function norm(s){ return (s||"").normalize("NFKC").replace(/[\s　]/g,"").replace(/[ぁ-ゖ]/g,(c)=>String.fromCharCode(c.charCodeAt(0)+0x60)); }
@@ -161,30 +165,47 @@ function openSheet(id){
   renderSheetCats();
   $("s-recipe-sec").style.display = "";
   RV.show($("s-recipe"), `product_id=eq.${cur.id}`, cur.name, 1);
+  $("s-bag").value = cur.bag_size_g ?? "";
   $("s-nutri").innerHTML = nutriHtml(cur);
   $("s-recipe-edit").onclick = () => location.href = `recipe.html?product=${cur.id}`;
   $("sheet-bg").style.display = "block"; $("sheet").style.display = "block";
 }
 function closeSheet(){ $("sheet-bg").style.display = "none"; $("sheet").style.display = "none"; $("sheet-view").style.display = "none"; cur = null; }
 
-/* 栄養成分・アレルゲンの表示（データはPhase Bで原本スプレッドシートから移行済み） */
-function nutriHtml(p){
-  const n = p.nutrition || {};
-  const per = n.bag_g ? `1袋（${n.bag_g}g）あたり` : "";
-  const vals = [
-    n.kcal != null ? `エネルギー <b>${n.kcal}kcal</b>` : null,
-    n.protein_g != null ? `たんぱく質 ${n.protein_g}g` : null,
-    n.fat_g != null ? `脂質 ${n.fat_g}g` : null,
-    n.carb_g != null ? `炭水化物 ${n.carb_g}g` : null,
-    n.salt_g != null ? `食塩相当量 ${n.salt_g}g` : null,
-  ].filter(Boolean);
-  const nutri = vals.length
-    ? `<div style="font-size:.9rem;">${per ? per + "：" : ""}${vals.join("・")}</div>`
-    : `<div style="font-size:.85rem; color:#999;">栄養成分：未登録</div>`;
+/* 栄養成分・アレルゲンの表示
+   数字はレシピ×材料の栄養/100gからDB側（v_product_nutrition）で毎回計算する。
+   移行時にスプレッドシートから写した products.nutrition は使わない
+   ＝レシピを直せば栄養も追随する（写した数字はレシピを変えた瞬間に嘘になるため）。 */
+function nutriHtml(p, bagOverride){
+  const c = nutriCalc[p.id];
+  const bag = bagOverride != null ? bagOverride : (p.bag_size_g ?? null);
+  let nutri;
+  if (!c){
+    nutri = `<div style="font-size:.85rem; color:#999;">レシピが未登録なので栄養成分は計算できません</div>`;
+  } else {
+    const k = bag ? bag / 100 : 1;                     // 1袋ぶん／100gぶん
+    const r = (v, d) => v == null ? "－" : (Math.round(v * k * 10 ** d) / 10 ** d).toFixed(d);
+    const per = bag ? `1袋（${bag}g）あたり` : "100gあたり";
+    nutri =
+      `<div style="font-size:.9rem;">${per}：エネルギー <b>${r(c.kcal_per_100g, 0)}kcal</b>` +
+      `・たんぱく質 ${r(c.protein_per_100g, 1)}g・脂質 ${r(c.fat_per_100g, 1)}g` +
+      `・炭水化物 ${r(c.carb_per_100g, 1)}g・食塩相当量 ${r(c.salt_per_100g, 2)}g</div>`;
+    if (!bag)
+      nutri += `<div style="font-size:.8rem; color:#8a6d3b; margin-top:4px;">1袋◯gを入れると1袋あたりでも出ます</div>`;
+    if (c.coverage_pct != null && c.coverage_pct < 100)
+      nutri += `<div style="font-size:.8rem; color:#a5642a; margin-top:4px;">⚠ 材料の${c.coverage_pct}%ぶんしか栄養データがありません（数字は少なめに出ています）</div>`;
+  }
   const alg = p.allergens
     ? `<div style="font-size:.9rem; margin-top:4px;">アレルゲン：<b>${esc(p.allergens)}</b></div>`
     : `<div style="font-size:.85rem; color:#999; margin-top:4px;">アレルゲン：未登録</div>`;
   return `<div style="background:#faf8f3; border-radius:10px; padding:10px 12px;">${nutri}${alg}</div>`;
+}
+
+/* 1袋gを打っている最中も、その場で数字が動く（入れた効果がその場で見える） */
+function refreshNutri(){
+  if (!cur) return;
+  const v = $("s-bag").value === "" ? null : Number($("s-bag").value);
+  $("s-nutri").innerHTML = nutriHtml(cur, v);
 }
 
 /* 一覧の📖＝見るだけの商品情報シート（レシピ＋栄養・アレルゲン。編集フォームを経由しない） */
@@ -214,6 +235,8 @@ function diff(){
   if (y !== (cur.yield_per_batch ?? null)) d.yield_per_batch = y;
   const memo = $("s-memo").value.trim() || null;
   if (memo !== (cur.memo || null)) d.memo = memo;
+  const bag = $("s-bag").value === "" ? null : Number($("s-bag").value);
+  if (bag !== (cur.bag_size_g ?? null)) d.bag_size_g = bag;
   if (curActive !== cur.is_active) d.is_active = curActive;
   return d;
 }
@@ -246,9 +269,9 @@ async function save(){
 /* ---------- CSV書き出し（全商品・アーカイブ含む） ---------- */
 
 function exportCsv(){
-  const rows = [["商品ID","商品名","カテゴリ","販売価格（税込）","商品説明","表示名（ラベル用）","できあがり個数","メモ","状態"]];
+  const rows = [["商品ID","商品名","カテゴリ","販売価格（税込）","商品説明","表示名（ラベル用）","できあがり個数","1袋g","メモ","状態"]];
   for (const p of products){
-    rows.push([p.display_code, p.name, p.category, p.price_in_tax, p.description, p.label_display_name, p.yield_per_batch, p.memo, p.is_active ? "現役" : "アーカイブ"]);
+    rows.push([p.display_code, p.name, p.category, p.price_in_tax, p.description, p.label_display_name, p.yield_per_batch, p.bag_size_g, p.memo, p.is_active ? "現役" : "アーカイブ"]);
   }
   downloadCsv(`商品マスタ_${todayStr()}.csv`, rows);
   toast(`CSVを保存しました（${products.length}件）`);
@@ -278,9 +301,13 @@ $("search").addEventListener("input", renderList);
 
 if (requireLogin()){
   // アーカイブも含めて出す（戻す口はこの画面が唯一・genba指摘）
-  rest("products?select=id,display_code,name,category,price_in_tax,description,label_display_name,yield_per_batch,memo,is_active,nutrition,allergens&order=name&limit=500")
+  rest("products?select=id,display_code,name,category,price_in_tax,description,label_display_name,yield_per_batch,memo,is_active,bag_size_g,allergens&order=name&limit=500")
     .then((p)=>{ products = p; renderChips(); renderList(); })
     .catch(()=>toast("読み込みエラー"));
+  // 栄養の計算値（全商品まとめて1回・レシピが無い商品は行が来ない）
+  rest("v_product_nutrition?select=product_id,coverage_pct,kcal_per_100g,protein_per_100g,fat_per_100g,carb_per_100g,salt_per_100g&limit=1000")
+    .then((rows)=>{ for (const r of rows) nutriCalc[r.product_id] = r; })
+    .catch((e)=>console.error(e));
 }
 </script>
 </body>
