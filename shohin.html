@@ -193,7 +193,8 @@ function nutriHtml(p, bagOverride){
     if (!bag)
       nutri += `<div style="font-size:.8rem; color:#8a6d3b; margin-top:4px;">1袋◯gを入れると1袋あたりでも出ます</div>`;
     if (c.coverage_pct != null && c.coverage_pct < 100)
-      nutri += `<div style="font-size:.8rem; color:#a5642a; margin-top:4px;">⚠ 材料の${c.coverage_pct}%ぶんしか栄養データがありません（数字は少なめに出ています）</div>`;
+      nutri += `<div style="font-size:.8rem; color:#a5642a; margin-top:4px;">⚠ 材料の${c.coverage_pct}%ぶんしか栄養データがありません（数字は少なめに出ています）`
+             + ` <a href="zairyo.html?filter=nonutri" style="color:#5b3fa8; font-weight:700;">足りない材料を入れる →</a></div>`;
   }
   const alg = p.allergens
     ? `<div style="font-size:.9rem; margin-top:4px;">アレルゲン：<b>${esc(p.allergens)}</b></div>`

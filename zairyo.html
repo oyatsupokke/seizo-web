@@ -77,7 +77,29 @@
       <input type="number" id="s-lead" inputmode="numeric" min="0" step="1" placeholder="例：3">
     </div>
   </div>
+  <div id="nutri-buy" style="display:none">
+    <button type="button" class="fold-toggle" onclick="toggleNutri()" id="nutri-toggle">▸ 栄養成分（ラベル・栄養計算用）</button>
+    <div class="fold" id="nutri-fold">
+      <div class="hint" style="margin-top:8px">袋の裏の「栄養成分表示」をそのまま打ってください。単位は書かなくてOKです</div>
+      <label>その表示は何gあたり？</label>
+      <input type="number" id="n-basis" inputmode="decimal" min="1" step="any" value="100">
+      <div class="hint">ふつうは100。「1袋（200g）あたり」なら200、「1本（15g）あたり」なら15。100gあたりに自動換算して保存します</div>
+      <label>エネルギー（kcal）</label>
+      <input type="number" id="n-kcal" inputmode="decimal" min="0" step="any" placeholder="未入力">
+      <label>たんぱく質（g）</label>
+      <input type="number" id="n-pro" inputmode="decimal" min="0" step="any" placeholder="未入力">
+      <label>脂質（g）</label>
+      <input type="number" id="n-fat" inputmode="decimal" min="0" step="any" placeholder="未入力">
+      <label>炭水化物（g）</label>
+      <input type="number" id="n-carb" inputmode="decimal" min="0" step="any" placeholder="未入力">
+      <label>食塩相当量（g）</label>
+      <input type="number" id="n-salt" inputmode="decimal" min="0" step="any" placeholder="未入力">
+      <div class="hint">「ナトリウム◯mg」しか書いていない袋は、食塩相当量＝ナトリウムmg×2.54÷1000 です</div>
+      <div id="n-used" style="margin-top:10px"></div>
+    </div>
+  </div>
   <div class="ro-line" id="hansei-info" style="display:none"></div>
+  <div class="ro-line" id="nutri-calc" style="display:none"></div>
   <div id="hansei-fields" style="display:none">
     <label>数え方（本・台・枚など）</label>
     <input type="text" id="s-hunit" placeholder="例：本">
@@ -115,6 +137,8 @@
 <script src="api.js?v=20260827c"></script>
 <script>
 let items = [], cur = null, curActive = true, curTax = 8, selCat = null, confirming = false;
+let usedIn = {};      // ingredient_id -> 有効レシピでの使用行数
+let nutriCalc = {};   // 半製品の栄養（v_nutrition_calc）
 
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),2500); }
 function norm(s){ return (s||"").normalize("NFKC").replace(/[\s　]/g,"").replace(/[ぁ-ゖ]/g,(c)=>String.fromCharCode(c.charCodeAt(0)+0x60)); }
@@ -128,7 +152,8 @@ function renderChips(){
   $("cats").innerHTML =
     `<button type="button" class="${selCat===null?"selected":""}" onclick="setCat(null)">すべて</button>` +
     catList().map((c)=>`<button type="button" class="${selCat===c?"selected":""}" onclick="setCat('${esc(c)}')">${esc(c)}</button>`).join("") +
-    `<button type="button" class="${selCat==="_noprice"?"selected":""}" onclick="setCat('_noprice')" style="color:#b26a00">単価未設定</button>`;
+    `<button type="button" class="${selCat==="_noprice"?"selected":""}" onclick="setCat('_noprice')" style="color:#b26a00">単価未設定</button>` +
+    `<button type="button" class="${selCat==="_nonutri"?"selected":""}" onclick="setCat('_nonutri')" style="color:#b26a00">栄養が未入力</button>`;
 }
 function setCat(c){ selCat = c; renderChips(); renderList(); }
 
@@ -145,6 +170,11 @@ function renderList(){
   const q = $("search").value.trim();
   let list = items;
   if (selCat === "_noprice") list = list.filter((i)=>isBuy(i) && i.unit_price_in_tax == null && i.is_active);
+  // 栄養が未入力＝ただし「レシピで使われている購入材料」だけ出す（使っていない材料まで並べても手が止まるだけ）
+  else if (selCat === "_nonutri"){
+    list = list.filter((i)=>isBuy(i) && i.is_active && !(i.nutrition && i.nutrition.kcal != null) && usedIn[i.id]);
+    list = [...list].sort((a,b)=>(usedIn[b.id]||0)-(usedIn[a.id]||0));
+  }
   else if (selCat) list = list.filter((i)=>i.category === selCat);
   if (q) list = list.filter((i)=>i.name.includes(q) || norm(i.name).includes(norm(q)));
   $("list").innerHTML = list.slice(0, 200).map((i)=>`
@@ -153,6 +183,7 @@ function renderList(){
       ${i.is_active ? "" : `<span class="badge-kyubai">アーカイブ</span>`}
       ${i.category ? `<span class="cat">${esc(i.category)}</span>` : ""}
       ${priceText(i)}
+      ${selCat === "_nonutri" && usedIn[i.id] ? `<span class="badge-noprice">${usedIn[i.id]}レシピ</span>` : ""}
       ${isBuy(i) ? "" : `<button type="button" class="btn-book" onclick="event.stopPropagation();openRecipeQuick('${i.id}')">📖</button>`}
     </div>`).join("") || `<div class="empty">一致する材料がありません</div>`;
 }
@@ -224,6 +255,7 @@ function openSheet(id){
     $("s-recipe-edit").onclick = () => location.href = `recipe.html?ing=${cur.id}`;
   }
   $("fold").style.display = "none";
+  renderNutri();
   setActive(cur.is_active);
   renderSheetCats();
   $("sheet-bg").style.display = "block"; $("sheet").style.display = "block";
@@ -241,6 +273,58 @@ function openRecipeQuick(id){
 }
 
 function numOrNull(id){ const v = $(id).value; return v === "" ? null : Number(v); }
+
+/* ---------- 栄養成分 ---------- */
+
+const NUTRI_FIELDS = [["n-kcal","kcal"],["n-pro","protein_g"],["n-fat","fat_g"],["n-carb","carb_g"],["n-salt","salt_g"]];
+
+function toggleNutri(){
+  const f = $("nutri-fold");
+  f.style.display = f.style.display==="block" ? "none" : "block";
+}
+function renderNutri(){
+  $("nutri-buy").style.display = isBuy(cur) ? "block" : "none";
+  $("nutri-calc").style.display = isBuy(cur) ? "none" : "block";
+  if (isBuy(cur)){
+    const n = cur.nutrition || {};
+    $("n-basis").value = 100;                       // 保存済みは必ず100gあたり
+    for (const [el, key] of NUTRI_FIELDS) $(el).value = n[key] ?? "";
+    const has = n.kcal != null;
+    const cnt = usedIn[cur.id] || 0;
+    $("nutri-toggle").textContent = has
+      ? `▸ 栄養成分（100gあたり ${n.kcal}kcal）`
+      : cnt ? `▸ 栄養成分：未入力（${cnt}本のレシピで使用中）` : "▸ 栄養成分（ラベル・栄養計算用）";
+    $("n-used").innerHTML = cnt
+      ? `<div class="hint">この材料は<b>${cnt}本のレシピ</b>で使われています。入れると、その商品の栄養がその場で正しくなります</div>`
+      : `<div class="hint">この材料はまだレシピで使われていないので、急ぎではありません</div>`;
+    // 未入力かつ使用中なら最初から開けておく（探させない）
+    $("nutri-fold").style.display = (!has && cnt) ? "block" : "none";
+  } else {
+    const c = nutriCalc[cur.id];
+    $("nutri-calc").innerHTML = c
+      ? `🏷 栄養（100gあたり・レシピから自動計算）：<b>${c.kcal_per_100g}kcal</b>`
+        + `・たんぱく質${c.protein_per_100g}g・脂質${c.fat_per_100g}g・炭水化物${c.carb_per_100g}g・食塩${c.salt_per_100g}g`
+        + (c.coverage_pct < 100 ? `<br><span style="color:#a5642a">⚠ 中の材料の${c.coverage_pct}%ぶんしか栄養データがありません（数字は少なめです）</span>` : "")
+      : "🏷 栄養：レシピが未登録なので計算できません";
+  }
+}
+function nutriDiff(){
+  const basis = Number($("n-basis").value) || 100;
+  const next = {};
+  let any = false;
+  for (const [el, key] of NUTRI_FIELDS){
+    const v = numOrNull(el);
+    if (v != null){ next[key] = Math.round(v * 100 / basis * 1000) / 1000; any = true; }
+  }
+  const prev = cur.nutrition || {};
+  // label_name など栄養以外のキーは消さずに引き継ぐ
+  const keep = {};
+  for (const k of Object.keys(prev)) if (!NUTRI_FIELDS.some(([,key])=>key===k)) keep[k] = prev[k];
+  const merged = {...keep, ...next};
+  const same = JSON.stringify(Object.entries(merged).sort()) === JSON.stringify(Object.entries(prev).sort());
+  if (same) return undefined;
+  return Object.keys(merged).length ? merged : null;
+}
 
 function diff(){
   const d = {};
@@ -269,6 +353,8 @@ function diff(){
     if (rop !== (cur.reorder_point ?? null)) d.reorder_point = rop;
     const lead = numOrNull("s-lead");
     if (lead !== (cur.lead_time_days ?? null)) d.lead_time_days = lead;
+    const nut = nutriDiff();
+    if (nut !== undefined) d.nutrition = nut;
   } else {
     const hu = $("s-hunit").value.trim() || null;
     if (hu !== (cur.order_unit || null)) d.order_unit = hu;
@@ -336,9 +422,12 @@ async function newIngredient(){
 }
 
 function exportCsvZ(){
-  const rows = [["材料ID","材料名","カテゴリ","種別","容量g","税込単価","税抜単価","発注単位","発注単位g","発注点g","リードタイム日","状態"]];
+  const rows = [["材料ID","材料名","カテゴリ","種別","容量g","税込単価","税抜単価","発注単位","発注単位g","発注点g","リードタイム日","状態",
+                 "kcal/100g","たんぱく質/100g","脂質/100g","炭水化物/100g","食塩相当量/100g"]];
   for (const i of items){
-    rows.push([i.display_code, i.name, i.category, i.kind, i.package_size_g, i.unit_price_in_tax, i.unit_price_ex_tax, i.order_unit, i.order_unit_to_g, i.reorder_point, i.lead_time_days, i.is_active ? "現役" : "アーカイブ"]);
+    const n = i.nutrition || {};
+    rows.push([i.display_code, i.name, i.category, i.kind, i.package_size_g, i.unit_price_in_tax, i.unit_price_ex_tax, i.order_unit, i.order_unit_to_g, i.reorder_point, i.lead_time_days, i.is_active ? "現役" : "アーカイブ",
+               n.kcal, n.protein_g, n.fat_g, n.carb_g, n.salt_g]);
   }
   downloadCsv(`材料マスタ_${todayStr()}.csv`, rows);
   toast(`CSVを保存しました（${items.length}件）`);
@@ -350,14 +439,28 @@ $("search").addEventListener("input", renderList);
 $("s-price").addEventListener("input", renderExTax);
 
 if (requireLogin()){
-  rest("ingredients?select=id,display_code,name,category,kind,package_size_g,unit_price_in_tax,unit_price_ex_tax,order_unit,order_unit_to_g,reorder_point,lead_time_days,is_active&order=name&limit=500")
+  rest("ingredients?select=id,display_code,name,category,kind,package_size_g,unit_price_in_tax,unit_price_ex_tax,order_unit,order_unit_to_g,reorder_point,lead_time_days,is_active,nutrition&order=name&limit=500")
     .then((rows)=>{
       items = rows;
-      // zaiko.htmlの「単価未設定」バッジからの直リンク
-      if (new URLSearchParams(location.search).get("filter") === "noprice") selCat = "_noprice";
+      const f = new URLSearchParams(location.search).get("filter");
+      if (f === "noprice") selCat = "_noprice";        // zaiko.htmlの「単価未設定」バッジからの直リンク
+      if (f === "nonutri") selCat = "_nonutri";
       renderChips(); renderList();
     })
     .catch(()=>toast("読み込みエラー"));
+  // 有効レシピで何本使われているか（栄養を入れる優先順位に使う）
+  rest("recipe_items?select=ingredient_id,recipes!inner(is_active)&recipes.is_active=is.true&limit=5000")
+    .then((rows)=>{
+      const seen = {};
+      for (const r of rows) seen[r.ingredient_id] = (seen[r.ingredient_id] || 0) + 1;
+      usedIn = seen;
+      if (selCat === "_nonutri") renderList();
+    })
+    .catch((e)=>console.error(e));
+  // 半製品の栄養は計算値を出す（入力させない）
+  rest("v_nutrition_calc?root_kind=eq.ingredient&select=root_id,coverage_pct,kcal_per_100g,protein_per_100g,fat_per_100g,carb_per_100g,salt_per_100g&limit=1000")
+    .then((rows)=>{ for (const r of rows) nutriCalc[r.root_id] = r; })
+    .catch((e)=>console.error(e));
 }
 </script>
 </body>
