@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>包装資材 — 製造管理</title>
+<link rel="stylesheet" href="app.css">
+<style>
+  .p-row{display:flex; align-items:center; gap:8px; background:#fff; border-radius:10px; padding:12px; margin:6px 0; cursor:pointer;}
+  .p-row.inactive{opacity:.55; background:#f3f1ec;}
+  .p-row .nm{flex:1; min-width:0; overflow-wrap:anywhere; font-size:.95rem;}
+  .p-row .cat{flex:0 0 auto; font-size:.72rem; color:#777; background:#f4f1ea; border-radius:6px; padding:2px 7px;}
+  .p-row .price{flex:0 0 auto; font-size:.9rem; font-variant-numeric:tabular-nums;}
+  .p-row .used{flex:0 0 auto; font-size:.72rem; color:#5b3fa8; background:#efeaf9; border-radius:6px; padding:2px 7px; font-weight:700;}
+  .badge-noprice{font-size:.72rem; color:#b26a00; background:#fdf3e0; border-radius:6px; padding:2px 7px; font-weight:700;}
+  .badge-kyubai{font-size:.72rem; color:#c62828; background:#fbe9e9; border-radius:6px; padding:2px 7px; font-weight:700;}
+  .sheet label{display:block; margin:12px 0 4px; font-weight:700; font-size:.88rem;}
+  .sheet input[type=text], .sheet input[type=number]{width:100%; font-size:1rem; padding:10px; border-radius:10px; border:1px solid #ddd; box-sizing:border-box;}
+  .sheet .hint{font-size:.78rem; color:#888; margin-top:3px;}
+  .tax-seg{display:flex; gap:8px; margin-top:6px; align-items:center;}
+  .tax-seg button{flex:0 0 auto; padding:8px 14px; border-radius:10px; background:#f4f1ea; color:#555; font-weight:700; font-size:.85rem;}
+  .tax-seg button.selected{background:var(--c-shikomi); color:#fff;}
+  .tax-seg .extax{flex:1; text-align:right; font-size:.85rem; color:#666;}
+  .state-seg{display:flex; gap:8px; margin-top:4px;}
+  .state-seg button{flex:1; padding:10px; border-radius:10px; background:#f4f1ea; color:#555; font-weight:700;}
+  .state-seg button.on-active{background:#eef7ee; color:#2e7d32;}
+  .state-seg button.on-inactive{background:#fbe9e9; color:#c62828;}
+  .used-box{background:#faf8f3; border-radius:10px; padding:10px 12px; font-size:.85rem; margin-top:10px;}
+</style>
+</head>
+<body>
+<header>
+  <h1>包装資材</h1>
+  <div class="nav"><a href="index.html">🏠 今日やること</a><a href="shohin.html">🏷 商品マスタ</a><a href="zairyo.html">🧂 材料マスタ</a></div>
+</header>
+<main>
+  <div class="hint" style="font-size:.8rem; color:#888; margin:6px 0;">
+    袋・乾燥剤・箱の値段はここだけで管理します。<b>ここを直すと、その資材を使っている全商品の原価率が動きます</b>。
+    材料マスタとは別物なので、レシピ・棚卸・発注には出てきません
+  </div>
+  <div class="cat-chips" id="cats" style="margin-top:8px"></div>
+  <div id="list"><div class="empty">読み込み中…</div></div>
+</main>
+<div class="fab" onclick="newItem()">🆕 新しい資材</div>
+
+<div class="sheet-bg" id="sheet-bg" onclick="closeSheet()"></div>
+<div class="sheet" id="sheet">
+  <h2 id="s-title">資材を編集</h2>
+  <label>資材名</label>
+  <input type="text" id="s-name" autocomplete="off">
+  <label>区分</label>
+  <div class="cat-chips" id="s-cats"></div>
+  <input type="text" id="s-cat" placeholder="一覧に無ければ入力">
+  <label>品番（任意）</label>
+  <input type="text" id="s-code" placeholder="Z13無地・SD-4040K など">
+  <label>税込単価（円・1枚／1個あたり）</label>
+  <input type="number" id="s-price" inputmode="decimal" min="0" step="any" placeholder="未設定">
+  <div class="tax-seg">
+    <button type="button" id="tax8" onclick="setTax(8)">8%（食品）</button>
+    <button type="button" id="tax10" onclick="setTax(10)">10%</button>
+    <span class="extax" id="s-extax"></span>
+  </div>
+  <div class="hint">原価に足すのは<b>税抜</b>です。請求書の金額をそのまま打って、右の税率を選んでください</div>
+  <label>メモ（仕入先・サイズなど・任意）</label>
+  <input type="text" id="s-memo">
+  <label>この資材</label>
+  <div class="state-seg">
+    <button type="button" id="s-on" onclick="setActive(true)">現役</button>
+    <button type="button" id="s-off" onclick="setActive(false)">アーカイブ</button>
+  </div>
+  <div class="hint">アーカイブにすると商品の資材チップから消え、その商品の包装費からも外れます</div>
+  <div id="s-used" class="used-box"></div>
+  <div style="display:flex; gap:10px; margin-top:16px">
+    <button style="flex:1; background:#eee" onclick="closeSheet()">もどる</button>
+    <button class="btn-primary" style="flex:2" id="s-save" onclick="save()">保存する</button>
+  </div>
+</div>
+<div class="toast" id="toast"></div>
+
+<script src="api.js?v=20260829a"></script>
+<script>
+let items = [], cur = null, curActive = true, curTax = 10, selCat = null;
+let usedBy = {};          // packaging_material_id -> [商品名…]
+let myTenantId = null;
+
+function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),2500); }
+function norm(s){ return (s||"").normalize("NFKC").replace(/[\s　]/g,""); }
+function yen(n){ return n == null ? "" : "¥" + Number(n).toLocaleString("ja-JP", {maximumFractionDigits:2}); }
+function numOrNull(id){ const v = $(id).value; return v === "" ? null : Number(v); }
+
+function catList(){
+  return [...new Set(items.filter(i=>i.category).map(i=>i.category))].sort((a,b)=>a.localeCompare(b,"ja"));
+}
+function renderChips(){
+  $("cats").innerHTML =
+    `<button type="button" class="${selCat===null?"selected":""}" onclick="setCat(null)">すべて</button>` +
+    catList().map((c)=>`<button type="button" class="${selCat===c?"selected":""}" onclick="setCat('${esc(c)}')">${esc(c)}</button>`).join("");
+}
+function setCat(c){ selCat = c; renderChips(); renderList(); }
+
+function renderList(){
+  let list = selCat ? items.filter((i)=>i.category === selCat) : items;
+  $("list").innerHTML = list.map((i)=>{
+    const n = (usedBy[i.id] || []).length;
+    return `<div class="p-row ${i.is_active ? "" : "inactive"}" onclick="openSheet('${i.id}')">
+      <span class="nm">${esc(i.name)}</span>
+      ${i.is_active ? "" : `<span class="badge-kyubai">アーカイブ</span>`}
+      ${i.category ? `<span class="cat">${esc(i.category)}</span>` : ""}
+      ${i.unit_price_ex_tax != null
+        ? `<span class="price">税抜 ${yen(i.unit_price_ex_tax)}</span>`
+        : `<span class="badge-noprice">単価未設定</span>`}
+      ${n ? `<span class="used">${n}商品</span>` : ""}
+    </div>`;
+  }).join("") || `<div class="empty">まだ登録がありません。右下の「🆕 新しい資材」からどうぞ</div>`;
+}
+
+/* ---------- 編集シート ---------- */
+
+function renderSheetCats(){
+  const c = $("s-cat").value.trim();
+  const base = [...new Set([...catList(), "袋", "乾燥剤", "箱・缶", "その他"])];
+  $("s-cats").innerHTML = base.map((x)=>
+    `<button type="button" class="${x===c?"selected":""}" onclick="$('s-cat').value='${esc(x)}'; renderSheetCats()">${esc(x)}</button>`).join("");
+}
+function setActive(v){
+  curActive = v;
+  $("s-on").className = v ? "on-active" : "";
+  $("s-off").className = v ? "" : "on-inactive";
+}
+function setTax(r){
+  curTax = r;
+  $("tax8").classList.toggle("selected", r===8);
+  $("tax10").classList.toggle("selected", r===10);
+  renderExTax();
+}
+function renderExTax(){
+  const p = numOrNull("s-price");
+  $("s-extax").textContent = p != null ? `税抜 ${yen(Math.round(p / (1 + curTax/100) * 100) / 100)}（原価に使う額）` : "";
+}
+
+function openSheet(id){
+  cur = items.find((i)=>i.id===id) || null;
+  $("s-title").textContent = cur ? "資材を編集" : "新しい資材";
+  $("s-name").value = cur?.name || "";
+  $("s-cat").value = cur?.category || "";
+  $("s-code").value = cur?.display_code || "";
+  $("s-memo").value = cur?.memo || "";
+  $("s-price").value = cur?.unit_price_in_tax ?? "";
+  setTax(cur?.tax_rate ?? 10);
+  setActive(cur ? cur.is_active : true);
+  renderSheetCats();
+  const used = cur ? (usedBy[cur.id] || []) : [];
+  $("s-used").innerHTML = !cur
+    ? `登録したあと、商品マスタの「💰 原価・原価率」でこの資材を選ぶと包装費に入ります`
+    : used.length
+      ? `この資材を使っている商品：<b>${used.length}件</b><br><span style="color:#666">${used.slice(0,12).map(esc).join("・")}${used.length>12?` ほか${used.length-12}件`:""}</span>`
+      : `まだどの商品にも使われていません（商品マスタの「💰 原価・原価率」で選べます）`;
+  $("sheet-bg").style.display = "block"; $("sheet").style.display = "block";
+}
+function newItem(){ openSheet(null); $("s-name").focus(); }
+function closeSheet(){ $("sheet-bg").style.display = "none"; $("sheet").style.display = "none"; cur = null; }
+
+async function save(){
+  const name = $("s-name").value.trim();
+  if (!name){ toast("資材名を入れてください"); return; }
+  const dup = items.find((i)=>norm(i.name)===norm(name) && i.id !== cur?.id);
+  if (dup && !confirm(`「${dup.name}」がすでにあります。\n同じ名前でもう1件登録しますか？`)) return;
+  const price = numOrNull("s-price");
+  const ex = price != null ? Math.round(price / (1 + curTax/100) * 100) / 100 : null;
+  const body = {
+    name,
+    category: $("s-cat").value.trim() || null,
+    display_code: $("s-code").value.trim() || null,
+    memo: $("s-memo").value.trim() || null,
+    unit_price_in_tax: price,
+    unit_price_ex_tax: ex,
+    tax_rate: curTax,
+    is_active: curActive,
+  };
+  // 値段を変えると、使っている商品の原価率がその場で変わる。件数を見せてから確定する
+  if (cur && ex !== (cur.unit_price_ex_tax ?? null)){
+    const n = (usedBy[cur.id] || []).length;
+    if (n && !confirm(`税抜 ${yen(cur.unit_price_ex_tax)} → ${yen(ex)} に変えます。\nこの資材を使っている${n}商品の原価率が変わります。よろしいですか？`)) return;
+  }
+  const btn = $("s-save"); btn.disabled = true;
+  try {
+    if (cur){
+      await apiFetch(`/rest/v1/packaging_materials?id=eq.${cur.id}`, { method: "PATCH", body: JSON.stringify(body) });
+    } else {
+      if (!myTenantId) myTenantId = await sharedTenantId();
+      await insert("packaging_materials", [{ ...body, tenant_id: myTenantId }]);
+    }
+    toast("保存しました");
+    closeSheet();
+    await load();
+  } catch(e){ toast("保存に失敗しました"); console.error(e); }
+  finally { btn.disabled = false; }
+}
+
+/* ---------- 起動 ---------- */
+
+$("s-price").addEventListener("input", renderExTax);
+
+async function load(){
+  items = await rest("packaging_materials?select=id,display_code,name,category,unit_price_in_tax,unit_price_ex_tax,tax_rate,memo,is_active&order=category,name&limit=200");
+  usedBy = {};
+  try {
+    const links = await rest("product_packaging?select=packaging_material_id,products(name)&limit=2000");
+    for (const l of links){
+      (usedBy[l.packaging_material_id] ||= []).push(l.products?.name || "");
+    }
+  } catch(e){ console.error(e); }
+  renderChips(); renderList();
+}
+
+if (requireLogin()){
+  load().catch((e)=>{ console.error(e); toast("読み込みエラー"); });
+}
+</script>
+</body>
+</html>
