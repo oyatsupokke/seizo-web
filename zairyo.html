@@ -23,6 +23,10 @@
   .state-seg button{flex:1; padding:10px; border-radius:10px; background:#f4f1ea; color:#555; font-weight:700;}
   .state-seg button.on-active{background:#eef7ee; color:#2e7d32;}
   .state-seg button.on-inactive{background:#fbe9e9; color:#c62828;}
+  .price2{display:flex; gap:8px; margin-top:4px;}
+  .price2 > div{flex:1; display:flex; align-items:center; gap:6px; background:#f7f5f0; border-radius:10px; padding:0 4px 0 10px;}
+  .price2 span{flex:0 0 auto; font-size:.8rem; color:#777; font-weight:700;}
+  .price2 input{background:#fff;}
   .tax-seg{display:flex; gap:8px; margin-top:6px; align-items:center;}
   .tax-seg button{flex:0 0 auto; padding:8px 14px; border-radius:10px; background:#f4f1ea; color:#555; font-weight:700; font-size:.85rem;}
   .tax-seg button.selected{background:var(--c-shikomi); color:#fff;}
@@ -57,13 +61,17 @@
   <div id="buy-fields">
     <label>容量（1袋・1缶の中身g）</label>
     <input type="number" id="s-size" inputmode="decimal" min="0" step="any" placeholder="未設定">
-    <label>税込単価（円・1袋あたり）</label>
-    <input type="number" id="s-price" inputmode="decimal" min="0" step="any" placeholder="未設定">
+    <label>単価（円・1袋あたり）</label>
+    <div class="price2">
+      <div><span>税抜</span><input type="number" id="s-price-ex" inputmode="decimal" min="0" step="any" placeholder="未設定"></div>
+      <div><span>税込</span><input type="number" id="s-price-in" inputmode="decimal" min="0" step="any" placeholder="未設定"></div>
+    </div>
     <div class="tax-seg">
       <button type="button" id="tax8" onclick="setTax(8)">8%（食品）</button>
       <button type="button" id="tax10" onclick="setTax(10)">10%</button>
       <span class="extax" id="s-extax"></span>
     </div>
+    <div class="hint"><b>請求書に書いてあるほうを打てば、もう片方は自動で入ります。</b>原価の計算に使うのは税抜です</div>
     <button type="button" class="fold-toggle" onclick="toggleFold()">▸ 発注まわり（発注単位・発注点・リードタイム）</button>
     <div class="fold" id="fold">
       <label>発注単位の名前（袋・本・缶など）</label>
@@ -172,7 +180,8 @@ function label(i){
    移行時に単価0円・容量なしで入った仮材料が32件あり、0円のまま足すと原価が安く出る。
    だから「0円」も「容量なし」も、単価が入っていないのと同じく未設定として扱う。 */
 function noPrice(i){
-  return !(Number(i.unit_price_in_tax) > 0 && Number(i.package_size_g) > 0);
+  // 原価計算に使うのは税抜。税抜が無い／0なら、税込が入っていても原価には効かないので未設定扱い
+  return !(Number(i.unit_price_ex_tax) > 0 && Number(i.package_size_g) > 0);
 }
 function priceText(i){
   if (!isBuy(i)) return "";
@@ -217,15 +226,29 @@ function setActive(v){
   $("s-on").className = v ? "on-active" : "";
   $("s-off").className = v ? "" : "on-inactive";
 }
-function setTax(r){
+function setTax(r, keepBoth){
   curTax = r;
   $("tax8").classList.toggle("selected", r===8);
   $("tax10").classList.toggle("selected", r===10);
+  // 税率を切り替えたときは税抜を正として税込を引き直す（原価に効くのは税抜だから）
+  if (!keepBoth) syncPrice("ex"); else renderExTax();
+}
+/* 税抜⇄税込。打ったほうを正として、もう片方を上書きする。
+   スプシ時代の原材料一覧は「税抜を打って税込は×1.08の自動計算」で100件すべて揃っていた。
+   なのに旧画面は税込しか打てず、請求書の税抜額をそこに入れると原価が8%下振れした（まりほ指摘）。 */
+const round2 = (v) => Math.round(v * 100) / 100;
+function syncPrice(from){
+  const ex = numOrNull("s-price-ex"), inc = numOrNull("s-price-in");
+  if (from === "ex"){
+    $("s-price-in").value = ex == null ? "" : round2(ex * (1 + curTax/100));
+  } else {
+    $("s-price-ex").value = inc == null ? "" : round2(inc / (1 + curTax/100));
+  }
   renderExTax();
 }
 function renderExTax(){
-  const p = $("s-price").value === "" ? null : Number($("s-price").value);
-  $("s-extax").textContent = p != null ? `税抜 ${yen(p / (1 + curTax/100))}（自動計算）` : "";
+  const ex = numOrNull("s-price-ex");
+  $("s-extax").textContent = ex != null ? `原価は税抜 ${yen(ex)} で計算します` : "";
 }
 function toggleFold(){
   const f = $("fold");
@@ -247,7 +270,8 @@ function openSheet(id){
   $("hansei-info").style.display = isBuy(cur) ? "none" : "block";
   if (isBuy(cur)){
     $("s-size").value = cur.package_size_g ?? "";
-    $("s-price").value = cur.unit_price_in_tax ?? "";
+    $("s-price-ex").value = cur.unit_price_ex_tax ?? "";
+    $("s-price-in").value = cur.unit_price_in_tax ?? "";
     $("s-ounit").value = cur.order_unit || "";
     $("s-ounitg").value = cur.order_unit_to_g ?? "";
     $("s-rop").value = cur.reorder_point ?? "";
@@ -257,7 +281,7 @@ function openSheet(id){
     if (cur.unit_price_in_tax && cur.unit_price_ex_tax){
       rate = Math.abs(cur.unit_price_in_tax / cur.unit_price_ex_tax - 1.10) < 0.005 ? 10 : 8;
     } else if (cur.category === "酒") rate = 10;
-    setTax(rate);
+    setTax(rate, true);   // 開いただけで既存の値を書き換えない
   } else {
     $("hansei-info").textContent = cur.package_size_g
       ? `1バッチ出来上がり ${Number(cur.package_size_g)}g（レシピの材料合計から自動計算・レシピ画面で変わります）`
@@ -369,15 +393,10 @@ function diff(){
   if (isBuy(cur)){
     const size = numOrNull("s-size");
     if (size !== (cur.package_size_g ?? null)) d.package_size_g = size;
-    const price = numOrNull("s-price");
-    if (price !== (cur.unit_price_in_tax ?? null)){
-      d.unit_price_in_tax = price;
-      d.unit_price_ex_tax = price != null ? Math.round(price / (1 + curTax/100) * 100) / 100 : null;
-    } else if (price != null){
-      // 単価は同じでも税率だけ変えた場合
-      const ex = Math.round(price / (1 + curTax/100) * 100) / 100;
-      if (ex !== (cur.unit_price_ex_tax ?? null)) d.unit_price_ex_tax = ex;
-    }
+    const price = numOrNull("s-price-in");
+    if (price !== (cur.unit_price_in_tax ?? null)) d.unit_price_in_tax = price;
+    const priceEx = numOrNull("s-price-ex");
+    if (priceEx !== (cur.unit_price_ex_tax ?? null)) d.unit_price_ex_tax = priceEx;
     const ou = $("s-ounit").value.trim() || null;
     if (ou !== (cur.order_unit || null)) d.order_unit = ou;
     let oug = numOrNull("s-ounitg");
@@ -470,7 +489,8 @@ function exportCsvZ(){
 /* ---------- 起動 ---------- */
 
 $("search").addEventListener("input", renderList);
-$("s-price").addEventListener("input", renderExTax);
+$("s-price-ex").addEventListener("input", ()=>syncPrice("ex"));
+$("s-price-in").addEventListener("input", ()=>syncPrice("in"));
 
 if (requireLogin()){
   rest("ingredients?select=id,display_code,name,category,kind,package_size_g,unit_price_in_tax,unit_price_ex_tax,order_unit,order_unit_to_g,reorder_point,lead_time_days,is_active,nutrition&order=name&limit=500")

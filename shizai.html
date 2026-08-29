@@ -17,6 +17,10 @@
   .sheet label{display:block; margin:12px 0 4px; font-weight:700; font-size:.88rem;}
   .sheet input[type=text], .sheet input[type=number]{width:100%; font-size:1rem; padding:10px; border-radius:10px; border:1px solid #ddd; box-sizing:border-box;}
   .sheet .hint{font-size:.78rem; color:#888; margin-top:3px;}
+  .price2{display:flex; gap:8px; margin-top:4px;}
+  .price2 > div{flex:1; display:flex; align-items:center; gap:6px; background:#f7f5f0; border-radius:10px; padding:0 4px 0 10px;}
+  .price2 span{flex:0 0 auto; font-size:.8rem; color:#777; font-weight:700;}
+  .price2 input{background:#fff;}
   .tax-seg{display:flex; gap:8px; margin-top:6px; align-items:center;}
   .tax-seg button{flex:0 0 auto; padding:8px 14px; border-radius:10px; background:#f4f1ea; color:#555; font-weight:700; font-size:.85rem;}
   .tax-seg button.selected{background:var(--c-shikomi); color:#fff;}
@@ -53,14 +57,17 @@
   <input type="text" id="s-cat" placeholder="一覧に無ければ入力">
   <label>品番（任意）</label>
   <input type="text" id="s-code" placeholder="Z13無地・SD-4040K など">
-  <label>税込単価（円・1枚／1個あたり）</label>
-  <input type="number" id="s-price" inputmode="decimal" min="0" step="any" placeholder="未設定">
+  <label>単価（円・1枚／1個あたり）</label>
+  <div class="price2">
+    <div><span>税抜</span><input type="number" id="s-price-ex" inputmode="decimal" min="0" step="any" placeholder="未設定"></div>
+    <div><span>税込</span><input type="number" id="s-price-in" inputmode="decimal" min="0" step="any" placeholder="未設定"></div>
+  </div>
   <div class="tax-seg">
     <button type="button" id="tax8" onclick="setTax(8)">8%（食品）</button>
     <button type="button" id="tax10" onclick="setTax(10)">10%</button>
     <span class="extax" id="s-extax"></span>
   </div>
-  <div class="hint">原価に足すのは<b>税抜</b>です。請求書の金額をそのまま打って、右の税率を選んでください</div>
+  <div class="hint"><b>請求書に書いてあるほうを打てば、もう片方は自動で入ります。</b>原価に足すのは税抜です（袋・乾燥剤は10%）</div>
   <label>メモ（仕入先・サイズなど・任意）</label>
   <input type="text" id="s-memo">
   <label>この資材</label>
@@ -127,15 +134,24 @@ function setActive(v){
   $("s-on").className = v ? "on-active" : "";
   $("s-off").className = v ? "" : "on-inactive";
 }
-function setTax(r){
+function setTax(r, keepBoth){
   curTax = r;
   $("tax8").classList.toggle("selected", r===8);
   $("tax10").classList.toggle("selected", r===10);
+  // 税率を切り替えたときは税抜を正として税込を引き直す（原価に効くのは税抜だから）
+  if (!keepBoth) syncPrice("ex"); else renderExTax();
+}
+/* 税抜⇄税込。打ったほうを正として、もう片方を上書きする（材料マスタと同じ流儀） */
+const round2 = (v) => Math.round(v * 100) / 100;
+function syncPrice(from){
+  const ex = numOrNull("s-price-ex"), inc = numOrNull("s-price-in");
+  if (from === "ex") $("s-price-in").value = ex == null ? "" : round2(ex * (1 + curTax/100));
+  else               $("s-price-ex").value = inc == null ? "" : round2(inc / (1 + curTax/100));
   renderExTax();
 }
 function renderExTax(){
-  const p = numOrNull("s-price");
-  $("s-extax").textContent = p != null ? `税抜 ${yen(Math.round(p / (1 + curTax/100) * 100) / 100)}（原価に使う額）` : "";
+  const ex = numOrNull("s-price-ex");
+  $("s-extax").textContent = ex != null ? `原価に足すのは税抜 ${yen(ex)}` : "";
 }
 
 function openSheet(id){
@@ -145,8 +161,9 @@ function openSheet(id){
   $("s-cat").value = cur?.category || "";
   $("s-code").value = cur?.display_code || "";
   $("s-memo").value = cur?.memo || "";
-  $("s-price").value = cur?.unit_price_in_tax ?? "";
-  setTax(cur?.tax_rate ?? 10);
+  $("s-price-ex").value = cur?.unit_price_ex_tax ?? "";
+  $("s-price-in").value = cur?.unit_price_in_tax ?? "";
+  setTax(cur?.tax_rate ?? 10, true);   // 開いただけで既存の値を書き換えない
   setActive(cur ? cur.is_active : true);
   renderSheetCats();
   const used = cur ? (usedBy[cur.id] || []) : [];
@@ -165,8 +182,8 @@ async function save(){
   if (!name){ toast("資材名を入れてください"); return; }
   const dup = items.find((i)=>norm(i.name)===norm(name) && i.id !== cur?.id);
   if (dup && !confirm(`「${dup.name}」がすでにあります。\n同じ名前でもう1件登録しますか？`)) return;
-  const price = numOrNull("s-price");
-  const ex = price != null ? Math.round(price / (1 + curTax/100) * 100) / 100 : null;
+  const price = numOrNull("s-price-in");
+  const ex = numOrNull("s-price-ex");
   const body = {
     name,
     category: $("s-cat").value.trim() || null,
@@ -199,7 +216,8 @@ async function save(){
 
 /* ---------- 起動 ---------- */
 
-$("s-price").addEventListener("input", renderExTax);
+$("s-price-ex").addEventListener("input", ()=>syncPrice("ex"));
+$("s-price-in").addEventListener("input", ()=>syncPrice("in"));
 
 async function load(){
   items = await rest("packaging_materials?select=id,display_code,name,category,unit_price_in_tax,unit_price_ex_tax,tax_rate,memo,is_active&order=category,name&limit=200");
