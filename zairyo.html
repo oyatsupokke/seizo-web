@@ -145,6 +145,7 @@
 let items = [], cur = null, curActive = true, curTax = 8, selCat = null, confirming = false;
 let usedIn = {};      // ingredient_id -> 有効レシピでの使用行数
 let nutriCalc = {};   // 半製品の栄養（v_nutrition_calc）
+let costCalc = {};    // 半製品の原価（v_cost_calc）
 
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),2500); }
 function norm(s){ return (s||"").normalize("NFKC").replace(/[\s　]/g,"").replace(/[ぁ-ゖ]/g,(c)=>String.fromCharCode(c.charCodeAt(0)+0x60)); }
@@ -167,15 +168,25 @@ function label(i){
   if (!isBuy(i)) return i.category === "生地" ? `<span class="kiji">生地｜</span>${esc(i.name.replace(/生地$/,""))}` : `${esc(i.name)}〔半製品〕`;
   return esc(i.name);
 }
+/* 原価計算に使えるか＝単価と容量の両方がそろっているか。
+   移行時に単価0円・容量なしで入った仮材料が32件あり、0円のまま足すと原価が安く出る。
+   だから「0円」も「容量なし」も、単価が入っていないのと同じく未設定として扱う。 */
+function noPrice(i){
+  return !(Number(i.unit_price_in_tax) > 0 && Number(i.package_size_g) > 0);
+}
 function priceText(i){
   if (!isBuy(i)) return "";
-  if (i.unit_price_in_tax == null) return i.is_active ? `<span class="badge-noprice">単価未設定</span>` : "";
+  if (noPrice(i)) return i.is_active ? `<span class="badge-noprice">単価未設定</span>` : "";
   return `<span class="price">${yen(i.unit_price_in_tax)}${i.package_size_g ? `／${Number(i.package_size_g)}g` : ""}</span>`;
 }
 function renderList(){
   const q = $("search").value.trim();
   let list = items;
-  if (selCat === "_noprice") list = list.filter((i)=>isBuy(i) && i.unit_price_in_tax == null && i.is_active);
+  // 単価未設定＝レシピで使っている材料を上に（栄養と同じ並べ方。上から順に片付けられる）
+  if (selCat === "_noprice"){
+    list = list.filter((i)=>isBuy(i) && i.is_active && noPrice(i));
+    list = [...list].sort((a,b)=>(usedIn[b.id]||0)-(usedIn[a.id]||0));
+  }
   // 栄養が未入力＝ただし「レシピで使われている購入材料」だけ出す（使っていない材料まで並べても手が止まるだけ）
   else if (selCat === "_nonutri"){
     list = list.filter((i)=>isBuy(i) && i.is_active && !(i.nutrition && i.nutrition.kcal != null) && usedIn[i.id]);
@@ -189,7 +200,7 @@ function renderList(){
       ${i.is_active ? "" : `<span class="badge-kyubai">アーカイブ</span>`}
       ${i.category ? `<span class="cat">${esc(i.category)}</span>` : ""}
       ${priceText(i)}
-      ${selCat === "_nonutri" && usedIn[i.id] ? `<span class="badge-noprice">${usedIn[i.id]}レシピ</span>` : ""}
+      ${(selCat === "_nonutri" || selCat === "_noprice") && usedIn[i.id] ? `<span class="badge-noprice">${usedIn[i.id]}レシピ</span>` : ""}
       ${isBuy(i) ? "" : `<button type="button" class="btn-book" onclick="event.stopPropagation();openRecipeQuick('${i.id}')">📖</button>`}
     </div>`).join("") || `<div class="empty">一致する材料がありません</div>`;
 }
@@ -322,6 +333,12 @@ function renderNutri(){
         + `・たんぱく質${c.protein_per_100g}g・脂質${c.fat_per_100g}g・炭水化物${c.carb_per_100g}g・食塩${c.salt_per_100g}g`
         + (c.coverage_pct < 100 ? `<br><span style="color:#a5642a">⚠ 中の材料の${c.coverage_pct}%ぶんしか栄養データがありません（数字は少なめです）</span>` : "")
       : "🏷 栄養：レシピが未登録なので計算できません";
+    // 生地・クリームの原価も同じ機構で出す（この生地が1gいくらか＝商品の原価の内訳）
+    const k = costCalc[cur.id];
+    if (k && k.cost_per_g != null)
+      $("nutri-calc").innerHTML += `<br>💰 原価（レシピから自動計算）：1バッチ ${Number(k.batch_g).toLocaleString("ja-JP")}g で <b>¥${Math.round(k.cost_per_batch).toLocaleString("ja-JP")}</b>`
+        + `（1gあたり ${(Math.round(k.cost_per_g * 100) / 100).toFixed(2)}円）`
+        + (k.coverage_pct < 100 ? `<br><span style="color:#a5642a">⚠ 中の材料の${k.coverage_pct}%ぶんしか単価が入っていません（原価は安めです）</span>` : "");
   }
 }
 function nutriDiff(){
@@ -471,12 +488,16 @@ if (requireLogin()){
       const seen = {};
       for (const r of rows) seen[r.ingredient_id] = (seen[r.ingredient_id] || 0) + 1;
       usedIn = seen;
-      if (selCat === "_nonutri") renderList();
+      if (selCat === "_nonutri" || selCat === "_noprice") renderList();
     })
     .catch((e)=>console.error(e));
   // 半製品の栄養は計算値を出す（入力させない）
   rest("v_nutrition_calc?root_kind=eq.ingredient&select=root_id,coverage_pct,kcal_per_100g,protein_per_100g,fat_per_100g,carb_per_100g,salt_per_100g&limit=1000")
     .then((rows)=>{ for (const r of rows) nutriCalc[r.root_id] = r; })
+    .catch((e)=>console.error(e));
+  // 半製品の原価も計算値を出す（入力させない）
+  rest("v_cost_calc?root_kind=eq.ingredient&select=root_id,batch_g,coverage_pct,cost_per_batch,cost_per_g&limit=1000")
+    .then((rows)=>{ for (const r of rows) costCalc[r.root_id] = r; })
     .catch((e)=>console.error(e));
 }
 </script>

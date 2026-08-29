@@ -78,6 +78,11 @@
     <input type="number" id="s-bag" inputmode="decimal" min="0" step="any" oninput="refreshNutri()">
     <div class="hint">ここを入れると、下の栄養成分がレシピから自動で計算されます</div>
     <div id="s-nutri"></div>
+    <div class="section-label" style="margin-top:16px;">💰 原価・原価率</div>
+    <label>1袋あたりの包装費（袋・乾燥剤など・円）</label>
+    <input type="number" id="s-pack" inputmode="decimal" min="0" step="any" oninput="refreshCost()">
+    <div class="hint">クッキーは袋3円＋シートドライヤー3円＝6円が入っています</div>
+    <div id="s-cost"></div>
   </div>
   <div class="confirm-box" id="s-confirm" style="display:none"></div>
   <div style="display:flex; gap:10px; margin-top:16px">
@@ -100,6 +105,7 @@
 <script>
 let products = [], cur = null, curActive = true, selCat = null, confirming = false;
 let nutriCalc = {};   // product_id -> v_product_nutrition の1行
+let costCalc = {};    // product_id -> v_product_cost の1行
 
 function toast(msg){ const t=$("toast"); t.textContent=msg; t.classList.add("show"); setTimeout(()=>t.classList.remove("show"),2500); }
 function norm(s){ return (s||"").normalize("NFKC").replace(/[\s　]/g,"").replace(/[ぁ-ゖ]/g,(c)=>String.fromCharCode(c.charCodeAt(0)+0x60)); }
@@ -113,14 +119,28 @@ function renderChips(){
   $("cats").innerHTML =
     `<button type="button" class="${selCat===null?"selected":""}" onclick="setCat(null)">すべて</button>` +
     catList().map((c)=>`<button type="button" class="${selCat===c?"selected":""}" onclick="setCat('${esc(c)}')">${esc(c)}</button>`).join("") +
-    `<button type="button" class="${selCat==="_noprice"?"selected":""}" onclick="setCat('_noprice')" style="color:#b26a00">価格未設定</button>`;
+    `<button type="button" class="${selCat==="_noprice"?"selected":""}" onclick="setCat('_noprice')" style="color:#b26a00">価格未設定</button>` +
+    `<button type="button" class="${selCat==="_cost"?"selected":""}" onclick="setCat('_cost')" style="color:#5b3fa8">原価率が高い順</button>`;
 }
 function setCat(c){ selCat = c; renderChips(); renderList(); }
+
+/* 一覧の原価率バッジ。30%以上は赤・20%以上は橙（pokkeの実勢は3〜22%なので目立つ） */
+function costRateBadge(p){
+  const c = costCalc[p.id];
+  if (!c || c.cost_rate_pct == null) return "";
+  const r = Number(c.cost_rate_pct);
+  const col = r >= 30 ? "#b23b3b" : r >= 20 ? "#a5642a" : "#7a8a7c";
+  return `<span class="cat" style="color:${col}; font-variant-numeric:tabular-nums;">原価${r.toFixed(0)}%</span>`;
+}
 
 function renderList(){
   const q = $("search").value.trim();
   let list = products;
   if (selCat === "_noprice") list = list.filter((p)=>p.price_in_tax == null && p.is_active);
+  // 原価率が高い順＝どこで利益が薄いかを一覧で見るための並び（値付け・商品構成の判断材料）
+  else if (selCat === "_cost")
+    list = list.filter((p)=>p.is_active && costCalc[p.id] && costCalc[p.id].cost_rate_pct != null)
+               .slice().sort((a,b)=>costCalc[b.id].cost_rate_pct - costCalc[a.id].cost_rate_pct);
   else if (selCat) list = list.filter((p)=>p.category === selCat);
   if (q) list = list.filter((p)=>p.name.includes(q) || norm(p.name).includes(norm(q)));
   $("list").innerHTML = list.map((p)=>`
@@ -129,6 +149,7 @@ function renderList(){
       ${p.is_active ? "" : `<span class="badge-kyubai">アーカイブ</span>`}
       ${p.category ? `<span class="cat">${esc(p.category)}</span>` : ""}
       ${p.price_in_tax != null ? `<span class="price">${yen(p.price_in_tax)}</span>` : (p.is_active ? `<span class="badge-noprice">価格未設定</span>` : "")}
+      ${costRateBadge(p)}
       <button type="button" class="btn-book" onclick="event.stopPropagation();openRecipeQuick('${p.id}')">📖</button>
     </div>`).join("") || `<div class="empty">一致する商品がありません</div>`;
 }
@@ -167,6 +188,8 @@ function openSheet(id){
   RV.show($("s-recipe"), `product_id=eq.${cur.id}`, cur.name, 1);
   $("s-bag").value = cur.bag_size_g ?? "";
   $("s-nutri").innerHTML = nutriHtml(cur);
+  $("s-pack").value = cur.packaging_cost ?? "";
+  $("s-cost").innerHTML = costHtml(cur);
   $("s-recipe-edit").onclick = () => location.href = `recipe.html?product=${cur.id}`;
   $("sheet-bg").style.display = "block"; $("sheet").style.display = "block";
 }
@@ -202,11 +225,58 @@ function nutriHtml(p, bagOverride){
   return `<div style="background:#faf8f3; border-radius:10px; padding:10px 12px;">${nutri}${alg}</div>`;
 }
 
+/* 原価・原価率の表示
+   1バッチ材料原価＝Σ(材料g × 税抜単価 ÷ 容量g)。半製品は中身まで展開する（栄養と同じ機構）。
+   1袋あたり総原価＝1袋材料原価＋包装費。原価率・粗利は税抜売価を分母にする。
+   ＝スプレッドシート原本と同じ式で、35商品すべて一致することを確認済み。 */
+function costHtml(p, bagOverride, packOverride){
+  const c = costCalc[p.id];
+  if (!c || c.cost_per_g == null)
+    return `<div style="background:#faf8f3; border-radius:10px; padding:10px 12px; font-size:.85rem; color:#999;">レシピが未登録なので原価は計算できません</div>`;
+  const bag  = bagOverride  != null ? bagOverride  : (p.bag_size_g ?? null);
+  const pack = packOverride != null ? packOverride : (p.packaging_cost ?? null);
+  const r1 = (v) => Math.round(v * 10) / 10;
+  let h = `<div style="font-size:.9rem;">1バッチ（${Number(c.batch_g).toLocaleString("ja-JP")}g）の材料原価 <b>${yen(Math.round(c.cost_per_batch))}</b>`
+        + `<span style="color:#888;">（1gあたり ${(Math.round(c.cost_per_g * 100) / 100).toFixed(2)}円）</span></div>`;
+  if (bag){
+    const mat = c.cost_per_g * bag;
+    const tot = mat + (pack || 0);
+    h += `<div style="font-size:.9rem; margin-top:4px;">1袋（${bag}g）あたり：材料 ${r1(mat)}円`
+       + (pack ? ` ＋ 包装 ${r1(pack)}円 ＝ <b>${r1(tot)}円</b>` : ` <span style="color:#a5642a;">（包装費が未設定）</span>`)
+       + `</div>`;
+    const price = p.price_in_tax;
+    if (price != null){
+      const ex = Math.round(price / (1 + (p.tax_rate ?? 8) / 100));
+      const rate = 100 * tot / ex;
+      const col = rate >= 30 ? "#b23b3b" : rate >= 20 ? "#a5642a" : "#3a7d44";
+      h += `<div style="font-size:1rem; margin-top:6px;">原価率 <b style="color:${col};">${rate.toFixed(1)}%</b>`
+         + (pack ? "" : `<span style="color:#a5642a; font-size:.85rem;">（包装費ぬき）</span>`)
+         + `　粗利 <b>${yen(Math.round(ex - tot))}</b>`
+         + `<span style="color:#888; font-size:.85rem;">（税抜売価 ${yen(ex)}）</span></div>`;
+    } else {
+      h += `<div style="font-size:.8rem; color:#8a6d3b; margin-top:4px;">販売価格を入れると原価率と粗利も出ます</div>`;
+    }
+  } else {
+    h += `<div style="font-size:.8rem; color:#8a6d3b; margin-top:4px;">1袋◯gを入れると1袋の原価と原価率が出ます</div>`;
+  }
+  if (c.coverage_pct != null && c.coverage_pct < 100)
+    h += `<div style="font-size:.8rem; color:#a5642a; margin-top:4px;">⚠ 材料の${c.coverage_pct}%ぶんしか単価が入っていません（原価は安めに出ています）`
+       + ` <a href="zairyo.html?filter=noprice" style="color:#5b3fa8; font-weight:700;">足りない材料を入れる →</a></div>`;
+  return `<div style="background:#faf8f3; border-radius:10px; padding:10px 12px;">${h}</div>`;
+}
+
 /* 1袋gを打っている最中も、その場で数字が動く（入れた効果がその場で見える） */
 function refreshNutri(){
   if (!cur) return;
   const v = $("s-bag").value === "" ? null : Number($("s-bag").value);
   $("s-nutri").innerHTML = nutriHtml(cur, v);
+  refreshCost();
+}
+function refreshCost(){
+  if (!cur) return;
+  const bag  = $("s-bag").value  === "" ? null : Number($("s-bag").value);
+  const pack = $("s-pack").value === "" ? null : Number($("s-pack").value);
+  $("s-cost").innerHTML = costHtml(cur, bag, pack);
 }
 
 /* 一覧の📖＝見るだけの商品情報シート（レシピ＋栄養・アレルゲン。編集フォームを経由しない） */
@@ -214,7 +284,8 @@ function openRecipeQuick(id){
   const p = products.find((x)=>x.id===id);
   if (!p) return;
   $("v-title").textContent = `📖 ${p.name}`;
-  $("v-extra").innerHTML = `<div class="section-label" style="margin-top:12px;">🏷 栄養成分・アレルゲン</div>` + nutriHtml(p);
+  $("v-extra").innerHTML = `<div class="section-label" style="margin-top:12px;">🏷 栄養成分・アレルゲン</div>` + nutriHtml(p)
+    + `<div class="section-label" style="margin-top:12px;">💰 原価・原価率</div>` + costHtml(p);
   $("v-edit").onclick = () => location.href = `recipe.html?product=${p.id}`;
   $("sheet-bg").style.display = "block"; $("sheet-view").style.display = "block";
   RV.show($("v-body"), `product_id=eq.${p.id}`, p.name, 1);
@@ -238,6 +309,8 @@ function diff(){
   if (memo !== (cur.memo || null)) d.memo = memo;
   const bag = $("s-bag").value === "" ? null : Number($("s-bag").value);
   if (bag !== (cur.bag_size_g ?? null)) d.bag_size_g = bag;
+  const pack = $("s-pack").value === "" ? null : Number($("s-pack").value);
+  if (pack !== (cur.packaging_cost ?? null)) d.packaging_cost = pack;
   if (curActive !== cur.is_active) d.is_active = curActive;
   return d;
 }
@@ -270,9 +343,12 @@ async function save(){
 /* ---------- CSV書き出し（全商品・アーカイブ含む） ---------- */
 
 function exportCsv(){
-  const rows = [["商品ID","商品名","カテゴリ","販売価格（税込）","商品説明","表示名（ラベル用）","できあがり個数","1袋g","メモ","状態"]];
+  const rows = [["商品ID","商品名","カテゴリ","販売価格（税込）","商品説明","表示名（ラベル用）","できあがり個数","1袋g","包装費","1バッチ材料原価","1袋あたり総原価","原価率%","粗利","単価充足%","メモ","状態"]];
   for (const p of products){
-    rows.push([p.display_code, p.name, p.category, p.price_in_tax, p.description, p.label_display_name, p.yield_per_batch, p.bag_size_g, p.memo, p.is_active ? "現役" : "アーカイブ"]);
+    const c = costCalc[p.id] || {};
+    rows.push([p.display_code, p.name, p.category, p.price_in_tax, p.description, p.label_display_name, p.yield_per_batch, p.bag_size_g,
+               p.packaging_cost, c.cost_per_batch, c.total_cost_per_bag, c.cost_rate_pct, c.gross_profit, c.coverage_pct,
+               p.memo, p.is_active ? "現役" : "アーカイブ"]);
   }
   downloadCsv(`商品マスタ_${todayStr()}.csv`, rows);
   toast(`CSVを保存しました（${products.length}件）`);
@@ -302,12 +378,16 @@ $("search").addEventListener("input", renderList);
 
 if (requireLogin()){
   // アーカイブも含めて出す（戻す口はこの画面が唯一・genba指摘）
-  rest("products?select=id,display_code,name,category,price_in_tax,description,label_display_name,yield_per_batch,memo,is_active,bag_size_g,allergens&order=name&limit=500")
+  rest("products?select=id,display_code,name,category,price_in_tax,description,label_display_name,yield_per_batch,memo,is_active,bag_size_g,allergens,packaging_cost,tax_rate&order=name&limit=500")
     .then((p)=>{ products = p; renderChips(); renderList(); })
     .catch(()=>toast("読み込みエラー"));
   // 栄養の計算値（全商品まとめて1回・レシピが無い商品は行が来ない）
   rest("v_product_nutrition?select=product_id,coverage_pct,kcal_per_100g,protein_per_100g,fat_per_100g,carb_per_100g,salt_per_100g&limit=1000")
     .then((rows)=>{ for (const r of rows) nutriCalc[r.product_id] = r; })
+    .catch((e)=>console.error(e));
+  // 原価の計算値（栄養と同じく全商品まとめて1回）
+  rest("v_product_cost?select=product_id,batch_g,coverage_pct,cost_per_batch,cost_per_g,cost_rate_pct,total_cost_per_bag,gross_profit&limit=1000")
+    .then((rows)=>{ for (const r of rows) costCalc[r.product_id] = r; renderList(); })
     .catch((e)=>console.error(e));
 }
 </script>
