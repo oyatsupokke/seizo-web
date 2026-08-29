@@ -95,6 +95,12 @@
       <label>食塩相当量（g）</label>
       <input type="number" id="n-salt" inputmode="decimal" min="0" step="any" placeholder="未入力">
       <div class="hint">「ナトリウム◯mg」しか書いていない袋は、食塩相当量＝ナトリウムmg×2.54÷1000 です</div>
+      <label>この数字の出どころ</label>
+      <div class="tax-seg">
+        <button type="button" id="src-fukuro" onclick="setSrc('袋の表示')">袋の表示</button>
+        <button type="button" id="src-seibun" onclick="setSrc('成分表2020')">成分表</button>
+      </div>
+      <div class="hint">袋に栄養成分表示が無い材料は、日本食品標準成分表（八訂）の値を使ってよい（食品表示法の「計算による表示」）。あとで根拠を聞かれたときのために、どちらか残しておく</div>
       <div id="n-used" style="margin-top:10px"></div>
     </div>
   </div>
@@ -277,6 +283,13 @@ function numOrNull(id){ const v = $(id).value; return v === "" ? null : Number(v
 /* ---------- 栄養成分 ---------- */
 
 const NUTRI_FIELDS = [["n-kcal","kcal"],["n-pro","protein_g"],["n-fat","fat_g"],["n-carb","carb_g"],["n-salt","salt_g"]];
+let curSrc = "袋の表示";
+
+function setSrc(v){
+  curSrc = v;
+  $("src-fukuro").classList.toggle("selected", v === "袋の表示");
+  $("src-seibun").classList.toggle("selected", v === "成分表2020");
+}
 
 function toggleNutri(){
   const f = $("nutri-fold");
@@ -289,14 +302,17 @@ function renderNutri(){
     const n = cur.nutrition || {};
     $("n-basis").value = 100;                       // 保存済みは必ず100gあたり
     for (const [el, key] of NUTRI_FIELDS) $(el).value = n[key] ?? "";
+    setSrc(n.src === "成分表2020" ? "成分表2020" : "袋の表示");
     const has = n.kcal != null;
     const cnt = usedIn[cur.id] || 0;
     $("nutri-toggle").textContent = has
-      ? `▸ 栄養成分（100gあたり ${n.kcal}kcal）`
+      ? `▸ 栄養成分（100gあたり ${n.kcal}kcal・${n.src === "成分表2020" ? "成分表" : "袋の表示"}）`
       : cnt ? `▸ 栄養成分：未入力（${cnt}本のレシピで使用中）` : "▸ 栄養成分（ラベル・栄養計算用）";
-    $("n-used").innerHTML = cnt
+    $("n-used").innerHTML = (n.src === "成分表2020" && n.src_item
+        ? `<div class="hint">いまの数字の出どころ：日本食品標準成分表（八訂）の「<b>${esc(n.src_item)}</b>」。袋に表示があればそちらを優先して上書きしてください</div>` : "")
+      + (cnt
       ? `<div class="hint">この材料は<b>${cnt}本のレシピ</b>で使われています。入れると、その商品の栄養がその場で正しくなります</div>`
-      : `<div class="hint">この材料はまだレシピで使われていないので、急ぎではありません</div>`;
+      : `<div class="hint">この材料はまだレシピで使われていないので、急ぎではありません</div>`);
     // 未入力かつ使用中なら最初から開けておく（探させない）
     $("nutri-fold").style.display = (!has && cnt) ? "block" : "none";
   } else {
@@ -316,10 +332,11 @@ function nutriDiff(){
     const v = numOrNull(el);
     if (v != null){ next[key] = Math.round(v * 100 / basis * 1000) / 1000; any = true; }
   }
+  if (any) next.src = curSrc;
   const prev = cur.nutrition || {};
   // label_name など栄養以外のキーは消さずに引き継ぐ
   const keep = {};
-  for (const k of Object.keys(prev)) if (!NUTRI_FIELDS.some(([,key])=>key===k)) keep[k] = prev[k];
+  for (const k of Object.keys(prev)) if (k !== "src" && k !== "src_item" && !NUTRI_FIELDS.some(([,key])=>key===k)) keep[k] = prev[k];
   const merged = {...keep, ...next};
   const same = JSON.stringify(Object.entries(merged).sort()) === JSON.stringify(Object.entries(prev).sort());
   if (same) return undefined;
@@ -423,11 +440,11 @@ async function newIngredient(){
 
 function exportCsvZ(){
   const rows = [["材料ID","材料名","カテゴリ","種別","容量g","税込単価","税抜単価","発注単位","発注単位g","発注点g","リードタイム日","状態",
-                 "kcal/100g","たんぱく質/100g","脂質/100g","炭水化物/100g","食塩相当量/100g"]];
+                 "kcal/100g","たんぱく質/100g","脂質/100g","炭水化物/100g","食塩相当量/100g","栄養の出どころ"]];
   for (const i of items){
     const n = i.nutrition || {};
     rows.push([i.display_code, i.name, i.category, i.kind, i.package_size_g, i.unit_price_in_tax, i.unit_price_ex_tax, i.order_unit, i.order_unit_to_g, i.reorder_point, i.lead_time_days, i.is_active ? "現役" : "アーカイブ",
-               n.kcal, n.protein_g, n.fat_g, n.carb_g, n.salt_g]);
+               n.kcal, n.protein_g, n.fat_g, n.carb_g, n.salt_g, n.kcal != null ? (n.src || "袋の表示") : ""]);
   }
   downloadCsv(`材料マスタ_${todayStr()}.csv`, rows);
   toast(`CSVを保存しました（${items.length}件）`);
